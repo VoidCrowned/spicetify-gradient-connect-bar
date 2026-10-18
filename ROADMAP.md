@@ -8,15 +8,15 @@ Gradient Progress Bar's code, pointed at the Connect bar. Tracking: [#30](https:
 
 | # | Issue | Area | Status |
 |---|---|---|---|
-| [#1](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/1) | Scaffold the repository like Gradient Progress Bar | packaging, documentation | ⬜ |
-| [#2](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/2) | Settings storage and migrations scaffold | core | ⬜ |
-| [#3](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/3) | Connect bar rendering: solid colour or a gradient of up to 8 colours | rendering | ⬜ |
-| [#4](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/4) | Theme-colour and transparent stops | rendering, compatibility | ⬜ |
-| [#5](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/5) | Settings modal: stop editor and inline colour picker | ui | ⬜ |
-| [#6](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/6) | Remove the Spread modes and all progress-bar code | rendering | ⬜ |
-| [#7](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/7) | Preview strip in the settings | ui | ⬜ |
-| [#8](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/8) | jsDelivr purge and CDN heal workflows | packaging | ⬜ |
-| [#9](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/9) | Self-test harness: `await __gcb.selfTest()` | testing | ⬜ |
+| [#1](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/1) | Scaffold the repository like Gradient Progress Bar | packaging, documentation | ✅ |
+| [#2](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/2) | Settings storage and migrations scaffold | core | ✅ |
+| [#3](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/3) | Connect bar rendering: solid colour or a gradient of up to 8 colours | rendering | ✅ |
+| [#4](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/4) | Theme-colour and transparent stops | rendering, compatibility | ✅ |
+| [#5](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/5) | Settings modal: stop editor and inline colour picker | ui | ✅ |
+| [#6](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/6) | Remove the Spread modes and all progress-bar code | rendering | ✅ |
+| [#7](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/7) | Preview strip in the settings | ui | ✅ |
+| [#8](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/8) | jsDelivr purge and CDN heal workflows | packaging | ✅ |
+| [#9](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/9) | Self-test harness: `await __gcb.selfTest()` | testing | ✅ |
 | [#10](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/10) | Dev setup: link, register, apply | packaging | ⬜ |
 
 ## Milestone 2 — Text colour

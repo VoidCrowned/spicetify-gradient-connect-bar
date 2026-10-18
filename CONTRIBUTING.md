@@ -25,9 +25,9 @@ The report includes an outline of the Connect bar's DOM, so selector problems af
    ```powershell
    spicetify config-dir
    ```
-2. Link the file from your clone into its `Extensions` folder, so edits in the repo are what Spotify loads. With Windows *Developer Mode* on (otherwise as administrator):
-   ```powershell
-   New-Item -ItemType SymbolicLink -Path "<config-dir>\Extensions\gradientConnectBar.js" -Target "<repo>\gradientConnectBar.js"
+2. Link the file from your clone into its `Extensions` folder, so edits in the repo are what Spotify loads. In `cmd`, with Windows *Developer Mode* on or as administrator:
+   ```bat
+   mklink "<config-dir>\Extensions\gradientConnectBar.js" "<repo>\gradientConnectBar.js"
    ```
 3. Enable it once and apply:
    ```powershell

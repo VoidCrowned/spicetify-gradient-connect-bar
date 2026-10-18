@@ -177,10 +177,10 @@ Spotify auto-updates and wipes Spicetify's patch. After an update: run `spicetif
 
 ## Development (Windows)
 
-`gradientConnectBar.js` is **symlinked** into Spicetify's `Extensions` folder, like GPB's (Developer Mode is on, so no elevation needed):
+`gradientConnectBar.js` is **symlinked** into Spicetify's `Extensions` folder (`%APPDATA%\spicetify\Extensions`), like GPB's. Developer Mode is on, so `mklink` needs no elevation; PowerShell 5.1's `New-Item -ItemType SymbolicLink` still asks for admin, so use `mklink`:
 
 ```powershell
-New-Item -ItemType SymbolicLink -Path "$env:APPDATA\spicetify\Extensions\gradientConnectBar.js" -Target "E:\phpstorm_ws\spicetify-gradient-connect-bar\gradientConnectBar.js"
+cmd /c mklink "$env:APPDATA\spicetify\Extensions\gradientConnectBar.js" "E:\phpstorm_ws\spicetify-gradient-connect-bar\gradientConnectBar.js"
 spicetify config extensions gradientConnectBar.js
 spicetify apply
 spicetify watch -e                                     # reload on save
