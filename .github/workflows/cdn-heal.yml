@@ -1,0 +1,29 @@
+name: CDN heal
+
+# Every 3 hours (off the hour): if jsDelivr @main still serves another VERSION than main,
+# purge again and wait for it (.github/scripts/purge-jsdelivr.sh --if-stale). Kept apart
+# from purge-jsdelivr.yml because GitHub disables a scheduled workflow after 60 days without
+# repository activity; purge-jsdelivr.yml re-enables this one on every push and release.
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: purge-jsdelivr
+
+jobs:
+  heal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Purge if the CDN is stale
+        env:
+          REPO: ${{ github.repository }}
+        run: bash .github/scripts/purge-jsdelivr.sh --if-stale
