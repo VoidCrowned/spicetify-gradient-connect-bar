@@ -1,0 +1,9 @@
+{
+  "name": "Gradient Connect Bar",
+  "description": "Recolour the Connect bar (\"Playing on …\") with a solid colour or a multi-stop gradient, with text that stays readable. Works alongside themes and Gradient Progress Bar.",
+  "preview": "preview.png",
+  "main": "gradientConnectBar.js",
+  "readme": "README.md",
+  "authors": [{ "name": "VoidCrowned", "url": "https://github.com/VoidCrowned" }],
+  "tags": ["connect", "colour", "gradient", "playback"]
+}

@@ -1,0 +1,59 @@
+name: Bug report
+description: Something looks or behaves wrong with Gradient Connect Bar.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Most problems depend on the exact Spotify version, theme and extensions, so please fill in the details below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: theme
+    attributes:
+      label: Theme
+      description: The Spicetify theme (and colour scheme) you use, or "none".
+      placeholder: Hazy (Custom color on)
+    validations:
+      required: true
+  - type: input
+    id: spotify-version
+    attributes:
+      label: Spotify version
+      description: Spotify → Settings → About.
+      placeholder: 1.3.4.258
+    validations:
+      required: true
+  - type: input
+    id: spicetify-version
+    attributes:
+      label: Spicetify version
+      description: Output of `spicetify -v`.
+      placeholder: 2.45.3
+    validations:
+      required: true
+  - type: textarea
+    id: extensions
+    attributes:
+      label: Other extensions
+      description: Other Spicetify extensions you have enabled.
+      placeholder: gradientProgressBar.js
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: If it's visual, paste or drag a screenshot here.
+  - type: textarea
+    id: report
+    attributes:
+      label: Self-test or status report
+      description: |
+        In Spotify's devtools console ([how to open it](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/blob/main/TESTING.md#opening-the-devtools-console)), ideally while audio plays on another device so the Connect bar is there:
+        - if the settings open, run `await __gcb.selfTest()` and paste the JSON it copies to your clipboard;
+        - otherwise run `__gcb.status()` and paste its output.
+      render: json
