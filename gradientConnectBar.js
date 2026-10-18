@@ -1,5 +1,5 @@
 // NAME: Gradient Connect Bar
-// VERSION: 0.1.0
+// VERSION: 0.2.0
 // AUTHOR: VoidCrowned
 // REPO: https://github.com/VoidCrowned/spicetify-gradient-connect-bar
 // DESCRIPTION: Recolours Spotify's Connect bar ("Playing on …") with a solid colour or a multi-stop gradient.
@@ -17,7 +17,7 @@
 (async function gcb() {
   "use strict";
 
-  const VERSION = "0.1.0";
+  const VERSION = "0.2.0";
   // Where this copy was loaded from: the Marketplace (jsDelivr) or the CLI (Extensions folder).
   // currentScript is only set before the first await, so capture it here.
   const SOURCE = document.currentScript?.src || null;
@@ -76,11 +76,14 @@
 
   // Never resolved to a hex, so it follows runtime theme changes (e.g. Hazy's per-song accent).
   const THEME_COLOUR = "var(--spice-button, var(--spice-text, #1db954))";
+  // Text colour (#11): Auto picks black or white by worst-case contrast; "default" overrides nothing.
+  const TEXT_MODES = ["auto", "black", "white", "default"];
+  const DEFAULT_TEXT = "auto";
 
   // ── Settings ────────────────────────────────────────────────────────────────
 
   function defaultSettings() {
-    return { version: SCHEMA_VERSION, gradient: false, stops: [{ id: "s1", kind: "theme" }] };
+    return { version: SCHEMA_VERSION, gradient: false, textColour: DEFAULT_TEXT, stops: [{ id: "s1", kind: "theme" }] };
   }
 
   // One step per schema version: MIGRATIONS[n] turns version-n data into version n + 1. Empty while
@@ -101,6 +104,9 @@
     if (!data || typeof data !== "object" || data.version !== SCHEMA_VERSION) return null;
     if (typeof data.gradient !== "boolean" || !Array.isArray(data.stops)) return null;
     if (data.stops.length < 1 || data.stops.length > MAX_STOPS) return null;
+    // Settings saved before the text colour option (#11) have none; anything else unknown is invalid.
+    const textColour = data.textColour === undefined ? DEFAULT_TEXT : data.textColour;
+    if (!TEXT_MODES.includes(textColour)) return null;
 
     const ids = new Set();
     const stops = [];
@@ -112,7 +118,7 @@
       else return null;
     }
     // A gradient needs at least two stops.
-    return { version: SCHEMA_VERSION, gradient: data.gradient && stops.length > 1, stops };
+    return { version: SCHEMA_VERSION, gradient: data.gradient && stops.length > 1, textColour, stops };
   }
 
   // Invalid data → defaults (written back) and one [gcb] warning. Settings from a newer version of
@@ -178,9 +184,12 @@
 
   // One rule on the bar. The selector is 0,4,2, so it beats any theme's rules without !important.
   // background-image only: Spotify's background-color (var(--background-base)) stays underneath.
-  function buildCss(s) {
+  // `textColour` (#14) is a literal colour for the text and the icon, or null to leave them to
+  // Spotify; --text-base and --essential-base change inside this rule only, never globally.
+  function buildCss(s, textColour = null) {
     const declarations = [];
     if (!isInert(s)) declarations.push(`background-image: ${barImage(s)};`);
+    if (textColour) declarations.push(`--text-base: ${textColour};`, `--essential-base: ${textColour};`);
     if (!declarations.length) return "";
     return [`${SELECTOR} {`, ...declarations.map((line) => `  ${line}`), `}`, ``].join("\n");
   }
@@ -192,15 +201,17 @@
       style.id = "gcb-style";
       document.head.appendChild(style);
     }
-    const css = buildCss(settings);
+    const css = buildCss(settings, appliedTextColour());
     if (style.textContent !== css) style.textContent = css;
   }
 
   // Called after every settings change: bar first, then the open modal, then storage.
-  // `rerender: false` for picker edits — the dots are updated in place instead.
+  // `rerender: false` for picker edits — the dots are updated in place instead. The text colour
+  // follows, debounced (#15).
   function update({ rerender = true } = {}) {
     applyCss();
     if (modal) rerender ? renderModal() : renderPreview();
+    scheduleTextColour();
     saveSettings();
   }
 
@@ -279,6 +290,188 @@
   function contrast(a, b) {
     const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
     return (hi + 0.05) / (lo + 0.05);
+  }
+
+  // ── Text colour (#11–#17) ───────────────────────────────────────────────────
+  // Auto puts black or white text on the bar, whichever has the higher WORST-CASE contrast over the
+  // colours behind the text — not an average, so a dark stop under light text (or the reverse) is
+  // never hidden by the rest of the gradient. The result is written into the bar's rule as a
+  // literal colour by regenerating the stylesheet.
+
+  const BLACK = "#000000";
+  const WHITE = "#ffffff";
+  const MIN_CONTRAST = 4.5; // WCAG AA for normal-size text
+  const TEXT_DELAY = 100; // debounce for recalculations (#15)
+  const SAMPLES_BETWEEN = 8; // evenly spaced samples between the text region's edges (#13)
+
+  let textRegion = null; // { from, to }: the text's span as fractions of the bar's width, last measured
+  let textResult = null; // the last calculation; kept while the bar is gone (#15)
+  let textTimer = 0;
+  let textRuns = 0; // counted for the self-test
+
+  // The colour written into the bar's rule now, or null to leave the text to Spotify. Black and
+  // White are literal; Auto is the last calculated choice.
+  function appliedTextColour(s = settings) {
+    if (s.textColour === "black") return BLACK;
+    if (s.textColour === "white") return WHITE;
+    if (s.textColour === "auto") return textResult?.colour ?? null;
+    return null;
+  }
+
+  // The text's span (#12): from the icon's left edge to the text button's right edge, as fractions
+  // of the bar's background area (its padding box). Null if the bar has no size or children.
+  function measureTextRegion(bar) {
+    const icon = bar.querySelector(BAR_ICON);
+    const link = bar.querySelector(BAR_LINK);
+    const box = bar.getBoundingClientRect();
+    const width = bar.clientWidth || box.width;
+    if (!icon || !link || !width) return null;
+    const left = box.left + bar.clientLeft;
+    const from = clamp((icon.getBoundingClientRect().left - left) / width, 0, 1);
+    const to = clamp((link.getBoundingClientRect().right - left) / width, 0, 1);
+    return from <= to ? { from, to } : null;
+  }
+
+  // What the stops resolve to: the live theme colour from :root and the bar's own colour, as RGB.
+  const textContext = () => ({ theme: hexToRgb(themeHex()), base: hexToRgb(barBase()) });
+
+  function stopRgba(stop, { theme }) {
+    if (stop.kind === "theme") return [...theme, 1];
+    if (stop.kind === "transparent") return [0, 0, 0, 0];
+    return [...hexToRgb(stop.color), 1];
+  }
+
+  // The colours behind the text (#13): both edges of the region, every stop inside it and 8 evenly
+  // spaced points in between. Like the browser, stops interpolate in premultiplied sRGB; anything
+  // transparent is composited over the bar's own colour (`base`). An inert background is just
+  // the bar's own colour.
+  function gradientSamples(s, { from, to }, ctx) {
+    const colours = isInert(s) ? [[...ctx.base, 1]] : activeStops(s).map((stop) => stopRgba(stop, ctx));
+    const last = colours.length - 1;
+    const positions = colours.map((_, i) => (last ? i / last : 0));
+    const colourAt = (t) => {
+      let c = colours[0];
+      if (last) {
+        const x = clamp(t, 0, 1) * last;
+        const k = Math.min(Math.floor(x), last - 1);
+        const u = x - k;
+        const [a, b] = [colours[k], colours[k + 1]];
+        const alpha = a[3] + (b[3] - a[3]) * u;
+        const premultiplied = [0, 1, 2].map((i) => a[i] * a[3] + (b[i] * b[3] - a[i] * a[3]) * u);
+        c = alpha ? [...premultiplied.map((v) => v / alpha), alpha] : [0, 0, 0, 0];
+      }
+      return [0, 1, 2].map((i) => c[i] * c[3] + ctx.base[i] * (1 - c[3]));
+    };
+    const between = Array.from({ length: SAMPLES_BETWEEN }, (_, k) => from + ((to - from) * (k + 1)) / (SAMPLES_BETWEEN + 1));
+    const inside = positions.filter((p) => p > from && p < to);
+    return [from, to, ...inside, ...between].sort((a, b) => a - b).map((t) => ({ t, rgb: colourAt(t) }));
+  }
+
+  // Black or white, whichever has the higher worst contrast over all samples (ties: black, as
+  // Spotify draws it). `warning` when neither reaches 4.5:1 (#16); the better one is still picked.
+  function pickTextColour(samples) {
+    const worst = (rgb) => Math.min(...samples.map((sample) => contrast(rgb, sample.rgb)));
+    const black = worst([0, 0, 0]);
+    const white = worst([255, 255, 255]);
+    return { colour: white > black ? WHITE : BLACK, black, white, warning: Math.max(black, white) < MIN_CONTRAST };
+  }
+
+  // Measures the bar if it's there (otherwise the last region is kept, or the whole width before
+  // the bar has ever been seen), samples, picks, and regenerates the stylesheet. `region` overrides
+  // the measurement (self-test only).
+  function recalcTextColour({ region = null } = {}) {
+    clearTimeout(textTimer);
+    textTimer = 0;
+    const bar = findBar();
+    if (bar) textRegion = measureTextRegion(bar) ?? textRegion;
+    const used = region ?? textRegion ?? { from: 0, to: 1 };
+    const samples = gradientSamples(settings, used, textContext());
+    const pick = pickTextColour(samples);
+    const mode = settings.textColour;
+    const colour = mode === "auto" ? pick.colour : appliedTextColour();
+    textResult = {
+      mode,
+      colour,
+      contrast: colour === BLACK ? pick.black : colour === WHITE ? pick.white : null,
+      black: pick.black,
+      white: pick.white,
+      warning: mode !== "default" && pick.warning,
+      region: used,
+      measured: !region && !!textRegion,
+      barPresent: !!bar,
+      samples: samples.length,
+    };
+    textRuns++;
+    applyCss();
+    if (modal) {
+      renderTextColour();
+      renderPreview();
+    }
+    return textResult;
+  }
+
+  function scheduleTextColour() {
+    clearTimeout(textTimer);
+    textTimer = setTimeout(recalcTextColour, TEXT_DELAY);
+  }
+
+  // Theme colours (and the bar's own colour behind transparent stops) change at runtime: Hazy
+  // rewrites them on :root after every song change.
+  const followsTheme = (s = settings) =>
+    s.textColour !== "default" && (isInert(s) || activeStops(s).some((stop) => stop.kind !== "custom"));
+
+  // Recalculation triggers (#15): the bar appearing or changing (an observer on the now-playing
+  // aside), the window resizing, and — while a theme-colour stop is used — song changes and
+  // :root style changes (Hazy sets its colour after the song change, not with it). Settings
+  // changes come through update(). The aside is re-found if Spotify replaces it; before it
+  // exists, one body observer waits for it and then disconnects.
+  let asideObserver = null;
+  let watchedAside = null;
+  let bodyObserver = null;
+
+  function watchBar() {
+    const aside = document.querySelector(PARENT);
+    if (aside && aside === watchedAside) return;
+    asideObserver?.disconnect();
+    asideObserver = null;
+    watchedAside = aside;
+    if (!aside) {
+      if (bodyObserver) return;
+      bodyObserver = new MutationObserver(() => {
+        if (!document.querySelector(PARENT)) return;
+        bodyObserver.disconnect();
+        bodyObserver = null;
+        watchBar();
+        scheduleTextColour();
+      });
+      bodyObserver.observe(document.body, { childList: true, subtree: true });
+      return;
+    }
+    asideObserver = new MutationObserver(onAsideMutation);
+    // The bar is a direct child; its own subtree changes when the device name does. The aside's
+    // parent tells us when the aside itself is replaced.
+    asideObserver.observe(aside, { childList: true, subtree: true, characterData: true });
+    if (aside.parentElement) asideObserver.observe(aside.parentElement, { childList: true });
+  }
+
+  // Most mutations in the aside are the player's own (the time label every second): only ones
+  // that add or remove a direct child, or happen inside the bar, schedule a recalculation.
+  function onAsideMutation(records) {
+    if (!watchedAside?.isConnected) {
+      watchBar();
+      return scheduleTextColour();
+    }
+    const insideBar = (node) => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest?.(SELECTOR);
+    if (records.some((r) => (r.target === watchedAside && r.type === "childList") || insideBar(r.target))) scheduleTextColour();
+  }
+
+  const onThemeChange = () => followsTheme() && scheduleTextColour();
+
+  function watchTextTriggers() {
+    watchBar();
+    window.addEventListener("resize", scheduleTextColour);
+    Spicetify.Player.addEventListener("songchange", onThemeChange);
+    new MutationObserver(onThemeChange).observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
   }
 
   // ── Stops ───────────────────────────────────────────────────────────────────
@@ -389,6 +582,16 @@
 .gcb-switch[aria-checked="true"] { background-color: var(--spice-button); }
 .gcb-switch[aria-checked="true"]::after { transform: translateX(18px); }
 .gcb-switch:focus-visible { outline: 2px solid var(--spice-text); outline-offset: 2px; }
+.gcb-text { display: flex; flex-direction: column; gap: 8px; }
+.gcb-text-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.gcb-modes { display: flex; gap: 2px; padding: 2px; border-radius: 500px; background-color: rgba(var(--spice-rgb-text), .1); }
+.gcb-mode { padding: 4px 12px; border: 1px solid transparent; border-radius: 500px; background: none; color: var(--spice-text); font: inherit; font-size: .875rem; font-weight: 700; white-space: nowrap; cursor: pointer; transition: background-color .15s; }
+.gcb-mode[aria-checked="true"] { background-color: var(--spice-button); }
+.gcb-mode.gcb-on-light { color: var(--spice-main); }
+.gcb-mode:hover:not([aria-checked="true"]) { background-color: rgba(var(--spice-rgb-text), .1); }
+.gcb-mode:focus-visible { outline: 2px solid var(--spice-text); outline-offset: 2px; }
+.gcb-text-hint { margin: 0; font-size: .75rem; line-height: 1.4; color: var(--spice-subtext); }
+.gcb-text-hint.gcb-warning { color: var(--spice-notification-error, #e91429); }
 .gcb-preview { display: flex; align-items: center; justify-content: flex-end; gap: 8px; box-sizing: border-box; height: 24px; padding: 0 12px; border-radius: 4px; overflow: hidden; font-size: .875rem; white-space: nowrap; }
 .gcb-preview-icon { flex: none; }
 .gcb-dots { display: flex; align-items: flex-end; gap: 10px; }
@@ -514,6 +717,15 @@
         <span class="gcb-label" id="gcb-gradient-label">Gradient</span>
         <button type="button" class="gcb-switch" role="switch" aria-labelledby="gcb-gradient-label"></button>
       </div>
+      <div class="gcb-text">
+        <div class="gcb-text-row">
+          <span class="gcb-label" id="gcb-text-label">Text colour</span>
+          <div class="gcb-modes" role="radiogroup" aria-labelledby="gcb-text-label" aria-describedby="gcb-text-hint">
+            ${TEXT_MODES.map((mode) => `<button type="button" class="gcb-mode" role="radio" data-mode="${mode}">${TEXT_LABELS[mode]}</button>`).join("")}
+          </div>
+        </div>
+        <p class="gcb-text-hint" id="gcb-text-hint"></p>
+      </div>
       <div class="gcb-preview" role="img" aria-label="Preview of the Connect bar">${withClass(DEVICE_ICON, "gcb-preview-icon")}<span class="gcb-preview-label">${PREVIEW_LABEL}</span></div>
       <div class="gcb-dots">
         <div class="gcb-stops"></div>
@@ -555,6 +767,10 @@
       root,
       gradientRow: root.querySelector(".gcb-gradient-row"),
       switchButton: root.querySelector(".gcb-switch"),
+      text: root.querySelector(".gcb-text"),
+      textModes: root.querySelector(".gcb-modes"),
+      textButtons: [...root.querySelectorAll(".gcb-mode")],
+      textHint: root.querySelector(".gcb-text-hint"),
       preview: root.querySelector(".gcb-preview"),
       previewIcon: root.querySelector(".gcb-preview-icon"),
       previewLabel: root.querySelector(".gcb-preview-label"),
@@ -590,6 +806,7 @@
     };
 
     m.switchButton.addEventListener("click", toggleGradient);
+    enableTextColour(m);
     // The −|+ stepper sits outside .gcb-stops, which renderStops() empties, so a clicked half is
     // never detached. − is the dot menu's Remove on the selected dot. Focus stays on the clicked
     // half; once that half is disabled (− at one colour, + at eight), it goes to the selected dot.
@@ -634,6 +851,83 @@
     if (!content || !container) return;
     container.style.paddingBottom = "0px";
     content.style.paddingBottom = getComputedStyle(content).paddingLeft;
+  }
+
+  // ── Text colour row (#11, #16) ──
+  // A radiogroup of plain buttons (no <select>: Hazy styles select globally), ported from GPB's
+  // Spread row. Built once per open and only updated in place, so a click never detaches its
+  // target. Roving tabindex; ←/→ (wrapping), Home and End move the choice, without modifier keys.
+  // The hint under it gives the worst-case contrast, and the warning when nothing reaches 4.5:1.
+
+  const TEXT_LABELS = { auto: "Auto", black: "Black", white: "White", default: "Spotify default" };
+  const COLOUR_NAMES = { [BLACK]: "Black", [WHITE]: "White" };
+
+  function setTextColour(mode) {
+    if (!TEXT_MODES.includes(mode) || mode === settings.textColour) return;
+    settings.textColour = mode;
+    recalcTextColour(); // at once: the row's hint shows the new contrast straight away
+    update({ rerender: false });
+  }
+
+  function enableTextColour(m) {
+    m.textModes.addEventListener("click", (e) => {
+      const button = e.target.closest(".gcb-mode");
+      if (button) setTextColour(button.dataset.mode);
+    });
+    m.textModes.addEventListener("keydown", (e) => {
+      const button = e.target.closest(".gcb-mode");
+      if (!button || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const i = m.textButtons.indexOf(button);
+      const last = m.textButtons.length - 1;
+      const next = { ArrowLeft: i ? i - 1 : last, ArrowRight: i === last ? 0 : i + 1, Home: 0, End: last }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      setTextColour(m.textButtons[next].dataset.mode);
+      m.textButtons[next].focus();
+    });
+  }
+
+  // The hint for the current mode and result.
+  function textHint(r = textResult, mode = settings.textColour) {
+    if (mode === "default") return { text: "Spotify and your theme colour the text; nothing is changed.", warning: false };
+    if (!r) return { text: "", warning: false };
+    const ratio = (n) => `${n.toFixed(1)}:1`;
+    const where = r.measured ? "" : " Measured across the whole bar until the bar has been seen.";
+    const name = COLOUR_NAMES[r.colour];
+    if (mode === "auto" && r.warning)
+      return {
+        text: `Neither black nor white reaches 4.5:1 behind the text; ${name.toLowerCase()} is the better one (${ratio(r.contrast)}). ` +
+          `Lighter or darker colours there will help.${where}`,
+        warning: true,
+      };
+    if (mode === "auto") return { text: `${name}: at least ${ratio(r.contrast)} against the colours behind the text.${where}`, warning: false };
+    const other = r.colour === BLACK ? WHITE : BLACK;
+    const low = r.contrast < MIN_CONTRAST;
+    const better = low && (other === WHITE ? r.white : r.black) > r.contrast ? ` Auto would pick ${COLOUR_NAMES[other].toLowerCase()} (${ratio(other === WHITE ? r.white : r.black)}).` : "";
+    return { text: `${name}: at least ${ratio(r.contrast)} against the colours behind the text${low ? ", below 4.5:1" : ""}.${better}${where}`, warning: low };
+  }
+
+  // In place: aria-checked, tabindex, the label colour on the filled button, the hint.
+  function renderTextColour() {
+    const onLight = labelOnLight(modal.textModes);
+    for (const button of modal.textButtons) {
+      const checked = button.dataset.mode === settings.textColour;
+      button.setAttribute("aria-checked", String(checked));
+      button.tabIndex = checked ? 0 : -1;
+      button.classList.toggle("gcb-on-light", checked && onLight);
+    }
+    const hint = textHint();
+    modal.textHint.textContent = hint.text;
+    modal.textHint.classList.toggle("gcb-warning", hint.warning);
+  }
+
+  // True when --spice-main contrasts more with the live --spice-button than --spice-text (GPB #43):
+  // the checked button is filled with --spice-button.
+  function labelOnLight(el) {
+    const fill = computedRgb(el, "var(--spice-button)");
+    const text = computedRgb(el, "var(--spice-text)");
+    const main = computedRgb(el, "var(--spice-main)");
+    return !!(fill && text && main) && contrast(main, fill) > contrast(text, fill);
   }
 
   // ── Two-step Reset ──
@@ -1251,6 +1545,7 @@
   function watchThemeColour(m) {
     const sync = () => {
       if (modal !== m) return;
+      renderTextColour(); // the checked button's label colour depends on the live --spice-button
       renderPreview();
       for (const stop of settings.stops) if (stop.kind !== "custom") renderStop(stop);
       const stop = pickerStop();
@@ -1296,6 +1591,7 @@
     closePopover(); // the dots are rebuilt, so the menu would lose its anchor
     if (!findStop(selectedId)) selectedId = settings.stops[0].id; // never nothing selected
     renderSwitch();
+    renderTextColour(); // in place: the row is never rebuilt
     renderPreview();
     renderStops();
     showInPicker(findStop(selectedId));
@@ -1334,7 +1630,8 @@
     return lastBarText || rootColour("--spice-sidebar") || "#000000";
   }
 
-  const previewTextColour = () => spotifyTextColour();
+  // The preview's label and icon: the colour written into the bar's rule, or Spotify's own.
+  const previewTextColour = () => appliedTextColour() ?? spotifyTextColour();
 
   function renderStops() {
     const row = modal.stopsRow;
@@ -1395,13 +1692,15 @@
   const songchangeCount = () => Spicetify.Player.eventListeners?.songchange?.length ?? 0;
   const computedHex = (el, prop) => (el ? toHex(getComputedStyle(el)[prop]) : null);
 
-  function setTestSettings(gradient, stops) {
-    settings = { version: SCHEMA_VERSION, gradient, stops: stops.map((s) => ({ ...s })) };
+  // Applies settings the way the UI does, then recalculates the text colour at once (no debounce).
+  function setTestSettings(gradient, stops, textColour = DEFAULT_TEXT) {
+    settings = { version: SCHEMA_VERSION, gradient, textColour, stops: stops.map((s) => ({ ...s })) };
     update();
+    recalcTextColour();
   }
 
   // Properties our stylesheet may set, all inside the bar's rule.
-  const ALLOWED_PROPS = ["background-image"];
+  const ALLOWED_PROPS = ["background-image", "--text-base", "--essential-base"];
   // A hashed class name: a 16–20 character token with upper- and lower-case letters.
   const HASH_LIKE = /(?<![\w-])[\w-]{16,20}(?![\w-])/g;
   const hashLike = (selector) => (selector.match(HASH_LIKE) ?? []).filter((t) => /[a-z]/.test(t) && /[A-Z]/.test(t));
@@ -1489,6 +1788,7 @@
       eyedropper: !!window.EyeDropper, // the picker's eyedropper button exists only with it
       spiceButton: getComputedStyle(document.documentElement).getPropertyValue("--spice-button").trim() || null,
       barBase: barBase(),
+      textColour: textStatus(),
       entry: startup.entry,
       phase: startup.phase,
       startupError: startup.error,
@@ -1540,7 +1840,7 @@
       clearTimeout(saveTimer);
       saveTimer = 0;
       settings = savedSettings;
-      applyCss();
+      recalcTextColour(); // the stylesheet and the text colour for the restored settings
       if (savedRaw == null) Spicetify.LocalStorage.remove(STORAGE_KEY);
       else Spicetify.LocalStorage.set(STORAGE_KEY, savedRaw);
       selfTestRunning = false;
@@ -1573,8 +1873,8 @@
     const bar = scoped === 1 ? findBar() : null;
 
     // ── Gradient builder (#3, #4) ──
-    const css = (gradient, stops) => buildCss({ version: SCHEMA_VERSION, gradient, stops });
-    const image = (gradient, stops) => barImage({ version: SCHEMA_VERSION, gradient, stops });
+    const css = (gradient, stops, text = null) => buildCss({ version: SCHEMA_VERSION, gradient, textColour: DEFAULT_TEXT, stops }, text);
+    const image = (gradient, stops) => barImage({ version: SCHEMA_VERSION, gradient, textColour: DEFAULT_TEXT, stops });
     const eight = ["#ff0000", "#ff8000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#8000ff", "#ff00ff"];
     const builds = {
       "1 stop (solid)": [image(false, [custom("s1", RED)]), `linear-gradient(to right, ${RED}, ${RED})`],
@@ -1589,7 +1889,7 @@
       wrongBuilds.map(([label, [got, want]]) => `${label}: ${got} (expected ${want})`).join("; ") || `${Object.keys(builds).length} cases`);
     const inertCases = { default: buildCss(defaultSettings()), "solid theme with more stops": css(false, [theme("s1"), custom("s2", RED)]),
       "solid transparent": css(false, [clear("s1")]) };
-    check(3, "A solid theme colour or a solid transparent stop leaves the background alone (empty stylesheet)",
+    check(3, "A solid theme colour or a solid transparent stop leaves the background alone (no rule without a text colour)",
       Object.values(inertCases).every((c) => c === ""), Object.entries(inertCases).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("; "));
     const themeCss = css(true, [theme("s1"), theme("s2")]);
     check(4, "Theme stop emits var(--spice-button …), never a resolved hex",
@@ -1602,13 +1902,14 @@
     // ── Injected CSS (#3) ──
     const samples = [
       [false, [custom("s1", RED)]],
-      [true, [theme("s1"), custom("s2", RED), clear("s3")]],
-      [true, eight.map((c, i) => custom(`s${i + 1}`, c))],
+      [true, [theme("s1"), custom("s2", RED), clear("s3")], WHITE],
+      [true, eight.map((c, i) => custom(`s${i + 1}`, c)), BLACK],
+      [false, [theme("s1")], WHITE], // inert background, text colour only
     ];
-    const lint = samples.flatMap(([gradient, stops]) => cssProblems(css(gradient, stops)));
+    const lint = samples.flatMap(([gradient, stops, text]) => cssProblems(css(gradient, stops, text)));
     check(3, "CSS: one rule on SELECTOR, no !important, no hash-like class names, never --background-base", !lint.length,
       lint.join("; ") || `${samples.length} samples clean`);
-    const parse = samples.flatMap(([gradient, stops]) => parseProblems(css(gradient, stops)));
+    const parse = samples.flatMap(([gradient, stops, text]) => parseProblems(css(gradient, stops, text)));
     check(3, "CSS parses: every rule and declaration survives the browser's parser", !parse.length,
       parse.join("; ") || `${samples.length} samples parsed`);
     const flagged = {
@@ -1616,9 +1917,10 @@
       "a hashed class": cssProblems(`${SELECTOR}${HASHED_SAMPLE} {\n  background-image: none;\n}\n`),
       "--background-base": cssProblems(`${SELECTOR} {\n  --background-base: red;\n}\n`),
       "a global rule": cssProblems(`:root {\n  background-image: none;\n}\n`),
+      "a global --text-base": cssProblems(`:root {\n  --text-base: #ffffff;\n}\n`),
     };
     const missed = Object.entries(flagged).filter(([, found]) => !found.length).map(([label]) => label);
-    check(3, "The CSS lint itself flags !important, a hashed class, --background-base and a rule elsewhere", !missed.length,
+    check(3, "The CSS lint itself flags !important, a hashed class, --background-base and rules elsewhere (a global --text-base too)", !missed.length,
       missed.length ? `not flagged: ${missed.join(", ")}` : Object.values(flagged).map((p) => p.join("/")).join("; "));
     const modalHashes = [...MODAL_CSS.matchAll(/([^{}]+)\{/g)].flatMap(([, sel]) => hashLike(sel));
     check(3, "Settings CSS: no hash-like class names, no !important, no --spice-rgb-button (Hazy leaves it stale)",
@@ -1706,6 +2008,147 @@
         `#gpb-style ${!!gpbStyle} (${gpbRules.length} rules, ${gpbTargets.length} targets), #gcb-style ${!!ours} (${ourTargets.length} targets); ` +
           `overlaps ${overlaps.length}, GPB rules on our bar ${gpbOnOurs.length}; GPB ${window.__gpb.version}`);
     }
+
+    // ── Text colour: contrast unit tests (#13) ──
+    const about = (value, want, tolerance) => Math.abs(value - want) <= tolerance;
+    const pairs = [[BLACK, WHITE, 21], ["#767676", WHITE, 4.54], ["#777777", WHITE, 4.48], [RED, WHITE, 4.0], [BLUE, WHITE, 8.59], ["#8372fd", BLACK, 5.79]];
+    const wrongPairs = pairs.filter(([a, b, want]) => !about(contrast(hexToRgb(a), hexToRgb(b)), want, 0.01));
+    check(13, "WCAG contrast of known pairs (21, 4.54, 4.48, 4.0, 8.59, 5.79 for #8372fd on black)", !wrongPairs.length,
+      pairs.map(([a, b]) => `${a}/${b} ${contrast(hexToRgb(a), hexToRgb(b)).toFixed(3)}`).join(", "));
+    // Pure runs with a fixed theme and bar colour (Hazy's custom #8372fd), independent of the live theme.
+    const hazy = { theme: hexToRgb("#8372fd"), base: hexToRgb("#8372fd") };
+    const stopsOf = (colours) => colours.map((c, i) => (c === "theme" ? theme(`s${i + 1}`) : c === "clear" ? clear(`s${i + 1}`) : custom(`s${i + 1}`, c)));
+    const pickFor = (colours, region, ctx = hazy) =>
+      pickTextColour(gradientSamples({ version: SCHEMA_VERSION, gradient: colours.length > 1, textColour: "auto", stops: stopsOf(colours) }, region, ctx));
+    const whole = { from: 0, to: 1 };
+    const right = { from: 0.8, to: 1 };
+    const fmt = (p) => `${COLOUR_NAMES[p.colour]} (black ${p.black.toFixed(2)}, white ${p.white.toFixed(2)})`;
+    const solidHazy = pickFor(["#8372fd"], whole);
+    const inertHazy = pickFor(["theme"], whole);
+    check(13, "#8372fd → black, ≈ 5.8:1 (as a colour and as Hazy's own bar colour behind a solid theme stop)",
+      solidHazy.colour === BLACK && about(solidHazy.black, 5.79, 0.01) && inertHazy.colour === BLACK && about(inertHazy.black, 5.79, 0.01),
+      `${fmt(solidHazy)}; inert ${fmt(inertHazy)}`);
+    const darkToLight = pickFor([BLACK, WHITE], right);
+    const lightToDark = pickFor([WHITE, BLACK], right);
+    check(13, "Dark-left / light-right gradient, text at the right → black; the reverse → white",
+      darkToLight.colour === BLACK && lightToDark.colour === WHITE, `${fmt(darkToLight)}; reverse ${fmt(lightToDark)}`);
+    const lightWithDark = [WHITE, "#fff8e1", WHITE, "#1a1a1a", WHITE];
+    const darkStopRegion = { from: 0.55, to: 0.95 };
+    const worstCase = pickFor(lightWithDark, darkStopRegion);
+    const darkSamples = gradientSamples({ version: SCHEMA_VERSION, gradient: true, textColour: "auto", stops: stopsOf(lightWithDark) }, darkStopRegion, hazy);
+    const meanLuminance = darkSamples.reduce((sum, sample) => sum + luminance(sample.rgb), 0) / darkSamples.length;
+    const byAverage = (meanLuminance + 0.05) / 0.05 > 1.05 / (meanLuminance + 0.05) ? "black" : "white";
+    check(13, "A light gradient with a dark stop inside the text region → white (the worst case, not an average)",
+      worstCase.colour === WHITE && byAverage === "black",
+      `${fmt(worstCase)}; an average luminance (${meanLuminance.toFixed(3)}) would have picked ${byAverage}`);
+    const counted = gradientSamples({ version: SCHEMA_VERSION, gradient: true, textColour: "auto", stops: stopsOf([RED, GREEN, BLUE, WHITE, BLACK]) }, { from: 0.2, to: 0.8 }, hazy);
+    const overWhite = gradientSamples({ version: SCHEMA_VERSION, gradient: true, textColour: "auto", stops: stopsOf([BLACK, "clear"]) }, { from: 0.5, to: 0.5 }, { ...hazy, base: [255, 255, 255] });
+    check(13, "Samples: both edges + every stop inside + 8 in between; transparency composited over the bar's colour (premultiplied)",
+      counted.length === 2 + 3 + SAMPLES_BETWEEN && counted[0].t === 0.2 && counted[counted.length - 1].t === 0.8 &&
+        overWhite.every((sample) => sample.rgb.every((v) => about(v, 127.5, 0.01))),
+      `${counted.length} samples at ${counted.map((sample) => sample.t.toFixed(2)).join(", ")}; black→transparent over white at 50 %: ${overWhite[0].rgb.map((v) => v.toFixed(1)).join(", ")}`);
+    rootStyle.setProperty("--spice-button", PROBE, "important");
+    const liveTheme = textContext().theme;
+    restoreButton();
+    check(13, "Theme stops are resolved from getComputedStyle(document.documentElement) at the time of the calculation",
+      rgbToHex(liveTheme) === PROBE, `${rgbToHex(liveTheme)} with --spice-button ${PROBE}`);
+    const hopeless = pickFor([BLACK, WHITE], whole);
+    check(16, "Neither black nor white reaches 4.5:1 → warning, and the better one is still picked",
+      hopeless.warning && hopeless.colour === BLACK && !pickFor(["#8372fd"], whole).warning, fmt(hopeless));
+
+    // ── Text colour on the live bar (#12, #14) ──
+    const textChecks = [
+      "Text region measured from the icon's left edge to the text's right edge, at the right-hand end",
+      "Auto / Black / White: the text span's and the icon's computed colours equal the chosen colour",
+      "Spotify default leaves the text and icon colours unchanged and writes no --text-base",
+    ];
+    if (!bar) {
+      textChecks.forEach((name) => skip(textChecks.indexOf(name) ? 14 : 12, name));
+      const keptRegion = textRegion;
+      try {
+        textRegion = { from: 0.9, to: 0.95 };
+        const kept = recalcTextColour();
+        textRegion = null;
+        const unseen = recalcTextColour();
+        check(15, "Without the bar the last region is kept; before it has ever been seen, the whole width counts",
+          kept.region.from === 0.9 && kept.region.to === 0.95 && kept.measured && !kept.barPresent &&
+            unseen.region.from === 0 && unseen.region.to === 1 && !unseen.measured,
+          `kept ${JSON.stringify(kept.region)}, never seen ${JSON.stringify(unseen.region)}`);
+      } finally {
+        textRegion = keptRegion;
+        recalcTextColour();
+      }
+    } else {
+      const link = bar.querySelector(BAR_LINK);
+      const span = link?.querySelector("span") ?? link;
+      const icon = bar.querySelector(BAR_ICON);
+      setTestSettings(false, [custom("s1", "#8372fd")]);
+      const r = textResult.region;
+      const box = bar.getBoundingClientRect();
+      const width = bar.clientWidth || box.width;
+      const left = box.left + bar.clientLeft;
+      const iconFrom = (icon.getBoundingClientRect().left - left) / width;
+      const linkTo = (link.getBoundingClientRect().right - left) / width;
+      check(12, textChecks[0],
+        textResult.measured && about(r.from, iconFrom, 0.001) && about(r.to, linkTo, 0.001) && r.from < r.to && r.from > 0.5 && r.to <= 1,
+        `${r.from.toFixed(3)}–${r.to.toFixed(3)} of ${width} px (icon ${iconFrom.toFixed(3)}, text ends ${linkTo.toFixed(3)})`);
+      const shown = () => ({ text: computedHex(span, "color"), icon: toHex(getComputedStyle(icon).fill) });
+      const cases = [["auto", "#202020", WHITE], ["auto", "#8372fd", BLACK], ["black", "#202020", BLACK], ["white", "#8372fd", WHITE]];
+      const wrongText = cases.filter(([mode, colour, want]) => {
+        setTestSettings(false, [custom("s1", colour)], mode);
+        const got = shown();
+        return got.text !== want || got.icon !== want || appliedTextColour() !== want;
+      }).map(([mode, colour, want]) => `${mode} on ${colour}: expected ${want}`);
+      const last = shown();
+      check(14, textChecks[1], !wrongText.length, wrongText.join("; ") || `${cases.length} cases; last: text ${last.text}, icon ${last.icon}`);
+      setTestSettings(true, [custom("s1", "#202020"), custom("s2", "#303030")], "default");
+      const spotify = barWithAndWithout(bar, () => JSON.stringify(shown()));
+      check(14, textChecks[2], spotify.ours === spotify.spotify && !styleText().includes("--text-base") && appliedTextColour() === null,
+        `ours ${spotify.ours}, Spotify's ${spotify.spotify}`);
+    }
+
+    // ── Recalculation triggers (#15) ──
+    const runsAfter = async (action) => {
+      const before = textRuns;
+      await action();
+      await sleep(TEXT_DELAY + 60);
+      return textRuns - before;
+    };
+    setTestSettings(true, [custom("s1", RED), custom("s2", BLUE)]);
+    const onSettings = await runsAfter(() => {
+      settings.stops[0].color = GREEN;
+      update({ rerender: false });
+      settings.stops[0].color = RED;
+      update({ rerender: false });
+    });
+    const onResize = await runsAfter(() => window.dispatchEvent(new Event("resize")));
+    const customSong = await runsAfter(() => onThemeChange());
+    setTestSettings(true, [theme("s1"), custom("s2", BLUE)]);
+    const themeSong = await runsAfter(() => onThemeChange());
+    const themeRoot = await runsAfter(async () => {
+      rootStyle.setProperty("--spice-button", PROBE, "important");
+      await tick();
+    });
+    const followedProbe = textResult.black === pickTextColour(gradientSamples(settings, textResult.region, textContext())).black;
+    restoreButton();
+    await sleep(TEXT_DELAY + 60);
+    const registered = Spicetify.Player.eventListeners?.songchange;
+    const aside = document.querySelector(PARENT);
+    check(15, "Debounced recalculation on settings changes (two quick edits → one run) and on window resize",
+      onSettings === 1 && onResize === 1, `settings ${onSettings} run(s), resize ${onResize}`);
+    check(15, "Song and :root colour changes recalculate only while a theme-colour stop is used",
+      customSong === 0 && themeSong === 1 && themeRoot >= 1 && followedProbe && (!registered || registered.includes(onThemeChange)),
+      `custom only ${customSong}, theme stop ${themeSong}, :root change ${themeRoot}; songchange listener ${registered ? (registered.includes(onThemeChange) ? "registered" : "MISSING") : "not inspectable"}`);
+    check(15, "The now-playing aside is watched for the bar appearing", !aside || (watchedAside === aside && !!asideObserver),
+      aside ? `watching ${watchedAside === aside ? "the current aside" : "a stale aside"}` : "no aside on the page; waiting for it");
+
+    // ── status() (#17) ──
+    const st = window.__gcb.status().textColour;
+    const statusKeys = ["mode", "colour", "contrast", "region", "barPresent", "warning"];
+    check(17, "status() reports the text colour: mode, chosen colour, worst-case contrast, region fractions, bar present, warning",
+      !!st && statusKeys.every((key) => key in st) && st.mode === settings.textColour && st.colour === textResult.colour &&
+        typeof st.contrast === "number" && typeof st.region?.from === "number" && st.barPresent === !!bar,
+      JSON.stringify(st));
 
     // ── Modal (#5, #7) ──
     settings = defaultSettings();
@@ -2076,11 +2519,89 @@
     stillOpen("Escape on an armed Reset");
     realClick(resetBtn);
     realClick(resetBtn);
-    check(5, "Second click on Reset → defaults, an empty stylesheet, the first dot selected, the same button reads 'Reset'",
-      JSON.stringify(settings) === JSON.stringify(defaultSettings()) && styleText() === buildCss(defaultSettings()) &&
+    await sleep(TEXT_DELAY + 60);
+    check(5, "Second click on Reset → defaults (no background rule, Auto text), the first dot selected, the same button reads 'Reset'",
+      JSON.stringify(settings) === JSON.stringify(defaultSettings()) && !styleText().includes("background-image") &&
+        styleText() === buildCss(settings, appliedTextColour()) && settings.textColour === "auto" &&
+        m.textButtons[0].getAttribute("aria-checked") === "true" &&
         selectionIs(settings.stops[0].id) && m.resetButton === resetBtn && isIdle(),
-      JSON.stringify(settings));
+      `${JSON.stringify(settings)}; ${styleText().replace(/\s+/g, " ")}`);
     stillOpen("Reset");
+
+    // ── Text colour row (#11, #16) ──
+    const textRowNodes = [...m.textButtons];
+    const textState = () =>
+      `mode ${settings.textColour}, checked ${m.textButtons.filter((b) => b.getAttribute("aria-checked") === "true").map((b) => b.dataset.mode).join() || "none"}, ` +
+      `tabindex ${m.textButtons.map((b) => b.tabIndex).join()}, focus ${document.activeElement?.dataset?.mode ?? document.activeElement?.className}, hint "${m.textHint.textContent}"`;
+    const textShows = (mode) =>
+      settings.textColour === mode && m.textButtons.every((b, i) => b === textRowNodes[i] && b.isConnected &&
+        (b.getAttribute("aria-checked") === "true") === (b.dataset.mode === mode) && b.tabIndex === (b.dataset.mode === mode ? 0 : -1)) &&
+      m.textHint.textContent === textHint().text;
+    check(11, "Text colour row between the Gradient row and the preview: a radiogroup of Auto, Black, White, Spotify default; no <select>",
+      m.gradientRow.nextElementSibling === m.text && m.text.nextElementSibling === m.preview && m.textModes.getAttribute("role") === "radiogroup" &&
+        m.textModes.getAttribute("aria-labelledby") === "gcb-text-label" &&
+        m.textButtons.map((b) => b.textContent).join() === "Auto,Black,White,Spotify default" &&
+        m.textButtons.every((b) => b.tagName === "BUTTON" && b.getAttribute("role") === "radio") && !m.root.querySelector("select") &&
+        m.textButtons.every((b) => reachable(b)),
+      textState());
+    setTestSettings(true, [custom("s1", RED), custom("s2", BLUE)]);
+    realClick(m.textButtons[2]);
+    const whiteCss = styleText();
+    const previewWhite = toHex(getComputedStyle(m.previewLabel).color);
+    check(11, "Clicking White applies it live: --text-base and --essential-base #ffffff in the bar's rule, the preview label white, the row updated in place",
+      textShows("white") && whiteCss.includes("--text-base: #ffffff;") && whiteCss.includes("--essential-base: #ffffff;") &&
+        previewWhite === WHITE && toHex(getComputedStyle(m.previewIcon).fill) === WHITE && m.textHint.textContent.startsWith("White"),
+      `${textState()}; preview ${previewWhite}`);
+    realClick(m.textButtons[3]);
+    check(11, "Spotify default writes no text colour; the preview shows Spotify's own",
+      textShows("default") && !styleText().includes("--text-base") && toHex(getComputedStyle(m.previewLabel).color) === spotifyTextColour(),
+      `${textState()}; preview ${toHex(getComputedStyle(m.previewLabel).color)}, Spotify's ${spotifyTextColour()}`);
+    m.textButtons[3].focus();
+    const textKeys = [];
+    for (const [key, expected] of [["Home", "auto"], ["ArrowRight", "black"], ["End", "default"], ["ArrowRight", "auto"]]) {
+      press(document.activeElement, key);
+      const ok = textShows(expected) && document.activeElement === m.textButtons[TEXT_MODES.indexOf(expected)];
+      textKeys.push(`${key} → ${settings.textColour}${ok ? "" : ` (expected ${expected} focused)`}`);
+    }
+    const altText = press(document.activeElement, "ArrowRight", { altKey: true });
+    textKeys.push(`Alt+→ → ${settings.textColour}${settings.textColour === "auto" && altText ? "" : " (expected no change)"}`);
+    check(11, "Keyboard: Home, →, End and → (wrapping) change the text colour and move focus; Alt+→ doesn't",
+      !textKeys.some((step) => step.includes("expected")), textKeys.join(", "));
+    stillOpen("changing the text colour");
+    realClick(m.textButtons[1]);
+    await sleep(SAVE_DELAY + 100);
+    const storedText = JSON.parse(Spicetify.LocalStorage.get(STORAGE_KEY) ?? "{}").textColour;
+    check(11, "The chosen text colour is saved", storedText === "black", `stored ${storedText}`);
+    realClick(m.textButtons[0]);
+
+    setTestSettings(true, [custom("s1", BLACK), custom("s2", WHITE)]);
+    recalcTextColour({ region: { from: 0, to: 1 } });
+    const warned = window.__gcb.status().textColour;
+    const errorColour = computedRgb(m.root, "var(--spice-notification-error, #e91429)");
+    check(16, "Neither reaching 4.5:1 → the settings show the warning in the error colour, and status() has it",
+      m.textHint.classList.contains("gcb-warning") && /4\.5:1/.test(m.textHint.textContent) && !!warned.warning &&
+        toHex(getComputedStyle(m.textHint).color) === rgbToHex(errorColour.slice(0, 3).map(Math.round)),
+      `hint "${m.textHint.textContent}"; status warning ${JSON.stringify(warned.warning)}`);
+    recalcTextColour();
+    // The checked button is filled with the live --spice-button; its label takes whichever of
+    // --spice-text and --spice-main contrasts more (GPB #43). A dark and a light probe.
+    const fillProblems = [];
+    for (const probe of ["#123456", "#ffe680"]) {
+      rootStyle.setProperty("--spice-button", probe, "important");
+      await sleep(250); // the :root observer, then the background-color transition (.15 s)
+      const checked = m.textButtons.find((b) => b.getAttribute("aria-checked") === "true");
+      for (const animation of checked.getAnimations()) animation.finish(); // our own button's fade, not Spotify's
+      const fill = parseRgb(getComputedStyle(checked).backgroundColor);
+      const label = parseRgb(getComputedStyle(checked).color);
+      const want = hexToRgb(probe);
+      const ratio = label ? contrast(label, want) : 0;
+      if (!fill || !fill.slice(0, 3).every((v, i) => Math.abs(v - want[i]) <= 1) || fill[3] !== 1 || ratio < MIN_CONTRAST)
+        fillProblems.push(`${probe}: fill ${getComputedStyle(checked).backgroundColor}, label ${getComputedStyle(checked).color} (${ratio.toFixed(2)}:1)`);
+    }
+    restoreButton();
+    await sleep(250);
+    check(11, "The checked text colour button is filled with a runtime --spice-button; its label reaches 4.5:1 on a dark and a light probe",
+      !fillProblems.length, fillProblems.join("; ") || "both probes fine");
 
     // ── Preview strip (#7) ──
     setTestSettings(true, [theme("s1"), clear("s2"), custom("s3", RED)]);
@@ -2090,9 +2611,9 @@
     const pcs = getComputedStyle(pv);
     const labelRect = m.previewLabel.getBoundingClientRect();
     const iconRect = m.previewIcon.getBoundingClientRect();
-    check(7, "Preview strip: 24 px high, 4 px radius, between the Gradient row and the dots",
+    check(7, "Preview strip: 24 px high, 4 px radius, between the Text colour row and the dots",
       Math.abs(pr.height - 24) <= 0.5 && pcs.borderTopLeftRadius === "4px" && pcs.borderBottomRightRadius === "4px" &&
-        m.gradientRow.nextElementSibling === pv && pv.nextElementSibling === m.dotsLine,
+        m.text.nextElementSibling === pv && pv.nextElementSibling === m.dotsLine,
       `${pr.width.toFixed(1)}×${pr.height.toFixed(1)}, radius ${pcs.borderRadius}`);
     check(7, "Preview strip: the bar's gradient over the bar's own colour",
       pcs.backgroundImage === computedImage(barImage(settings)) && toHex(pcs.backgroundColor) === barBase(),
@@ -2141,8 +2662,8 @@
     };
     check(2, "Storage key is our own (gcb:…), never Gradient Progress Bar's", STORAGE_KEY !== GPB_STORAGE_KEY && STORAGE_KEY.startsWith("gcb:"),
       `${STORAGE_KEY} vs GPB's ${GPB_STORAGE_KEY}`);
-    check(2, "Defaults: one theme stop, gradient off",
-      JSON.stringify(defaultSettings()) === JSON.stringify({ version: 1, gradient: false, stops: [{ id: "s1", kind: "theme" }] }),
+    check(2, "Defaults: one theme stop, gradient off, text colour Auto",
+      JSON.stringify(defaultSettings()) === JSON.stringify({ version: 1, gradient: false, textColour: "auto", stops: [{ id: "s1", kind: "theme" }] }),
       JSON.stringify(defaultSettings()));
     const invalid = {
       "corrupt JSON": "{broken",
@@ -2152,6 +2673,7 @@
       "no stops": JSON.stringify({ version: 1, gradient: false, stops: [] }),
       "9 stops": JSON.stringify({ version: 1, gradient: true, stops: Array.from({ length: 9 }, (_, i) => theme(`s${i}`)) }),
       "duplicate ids": JSON.stringify({ version: 1, gradient: true, stops: [theme("s1"), theme("s1")] }),
+      "unknown text colour": JSON.stringify({ version: 1, gradient: false, textColour: "grey", stops: [theme("s1")] }),
       "old version without a migration": JSON.stringify({ version: 0, gradient: false, stops: [theme("s1")] }),
     };
     const wrongLoads = Object.entries(invalid).map(([label, raw]) => [label, loadQuietly(raw)])
@@ -2174,11 +2696,15 @@
     check(2, "Migration scaffold: a version-0 step (test only) upgrades old data without a warning",
       migrated.loaded.gradient && migrated.loaded.stops.map((s) => s.color).join() === `${RED},${BLUE}` && migrated.ours === 0,
       `${JSON.stringify(migrated.loaded)}, ${migrated.ours} warning(s)`);
-    setTestSettings(true, [theme("s1"), custom("s2", RED), clear("s4")]);
+    const beforeText = loadQuietly(JSON.stringify({ version: 1, gradient: true, stops: [theme("s1"), custom("s2", RED)] }));
+    check(11, "Settings saved before the text colour option (no textColour) → Auto, no warning",
+      beforeText.loaded.textColour === "auto" && beforeText.loaded.gradient && beforeText.loaded.stops.length === 2 && beforeText.ours === 0,
+      `${JSON.stringify(beforeText.loaded)}, ${beforeText.ours} warning(s)`);
+    setTestSettings(true, [theme("s1"), custom("s2", RED), clear("s4")], "white");
     const writtenAtOnce = Spicetify.LocalStorage.get(STORAGE_KEY) === JSON.stringify(settings);
     await sleep(SAVE_DELAY + 100);
     const reloaded = loadSettings();
-    check(2, "Saves are debounced, then a load returns identical settings (round-trip, all three kinds)",
+    check(2, "Saves are debounced, then a load returns identical settings (round-trip, all three kinds, the text colour)",
       !writtenAtOnce && JSON.stringify(reloaded) === JSON.stringify(settings), `written at once ${writtenAtOnce}, ${JSON.stringify(reloaded)}`);
   }
 
@@ -2218,11 +2744,32 @@
       spotify: window.Spicetify?.Platform?.version ?? null,
       spicetify: spicetifyVersion(),
       apis: Object.fromEntries(["LocalStorage", "PopupModal", "Player"].map((n) => [n, !!api(n)])),
+      // While start-up waits for Spicetify, the text colour's state isn't initialised yet.
+      textColour: startup.phase === "waiting for Spicetify" ? null : textStatus(),
       page: location.href,
       dom: domProbe(),
     };
     console.log(`[gcb] ${report.phase}${report.entry ? `, entry: ${report.entry}` : ""}`);
+    if (report.textColour?.warning) console.warn(`[gcb] ${report.textColour.warning}`);
     return report;
+  }
+
+  // The text colour in status() (#17): mode, the chosen colour, its worst-case contrast, the text
+  // region as fractions of the bar's width, whether the bar is there, and the warning, if any.
+  function textStatus() {
+    const r = textResult;
+    const round = (n) => (typeof n === "number" ? Math.round(n * 1000) / 1000 : null);
+    const mode = settings?.textColour ?? null;
+    return {
+      mode,
+      colour: r?.colour ?? null,
+      contrast: round(r?.contrast),
+      black: round(r?.black),
+      white: round(r?.white),
+      region: r?.region ? { from: round(r.region.from), to: round(r.region.to), measured: r.measured } : null,
+      barPresent: !!document.querySelector(SELECTOR),
+      warning: r?.warning ? textHint(r, mode).text : null,
+    };
   }
 
   // ── Start-up ────────────────────────────────────────────────────────────────
@@ -2249,7 +2796,8 @@
   try {
     settings = loadSettings();
     window.addEventListener("beforeunload", flushSettings);
-    applyCss(); // the bar works even if no entry point can be registered
+    recalcTextColour(); // applies the stylesheet, text colour included, so there's no flash of the old one
+    watchTextTriggers();
     window.__gcb = { version: VERSION, status: () => statusReport(), selfTest, openSettings: () => modal || openModal() };
     startup.entry = enableBarContextMenu();
     startup.phase = "ready";
