@@ -17,7 +17,7 @@ Gradient Progress Bar's code, pointed at the Connect bar. Tracking: [#30](https:
 | [#7](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/7) | Preview strip in the settings | ui | ✅ |
 | [#8](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/8) | jsDelivr purge and CDN heal workflows | packaging | ✅ |
 | [#9](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/9) | Self-test harness: `await __gcb.selfTest()` | testing | ✅ |
-| [#10](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/10) | Dev setup: link, register, apply | packaging | ⬜ |
+| [#10](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/10) | Dev setup: link, register, apply | packaging | ✅ |
 
 ## Milestone 2 — Text colour
 
@@ -25,13 +25,13 @@ A *Text colour* setting: Auto (default), Black, White or Spotify default. Auto p
 
 | # | Issue | Area | Status |
 |---|---|---|---|
-| [#11](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/11) | Text colour setting: Auto / Black / White / Spotify default | ui, enhancement | ⬜ |
-| [#12](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/12) | Auto: measure the text region | rendering | ⬜ |
-| [#13](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/13) | Auto: sample the gradient and pick by worst-case WCAG contrast | rendering | ⬜ |
-| [#14](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/14) | Write the chosen text colour into the bar's rule | rendering | ⬜ |
-| [#15](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/15) | Recalculate the text colour when things change (debounced) | rendering | ⬜ |
-| [#16](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/16) | Warn when neither black nor white is readable | ui | ⬜ |
-| [#17](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/17) | `__gcb.status()` reports the text colour | testing | ⬜ |
+| [#11](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/11) | Text colour setting: Auto / Black / White / Spotify default | ui, enhancement | ✅ |
+| [#12](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/12) | Auto: measure the text region | rendering | ✅ |
+| [#13](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/13) | Auto: sample the gradient and pick by worst-case WCAG contrast | rendering | ✅ |
+| [#14](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/14) | Write the chosen text colour into the bar's rule | rendering | ✅ |
+| [#15](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/15) | Recalculate the text colour when things change (debounced) | rendering | ✅ |
+| [#16](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/16) | Warn when neither black nor white is readable | ui | ✅ |
+| [#17](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/17) | `__gcb.status()` reports the text colour | testing | ✅ |
 
 ## Milestone 3 — Release 1.0.0
 
