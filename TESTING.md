@@ -33,7 +33,12 @@ It covers:
 - **Gradient Progress Bar alongside** (when `__gpb` exists): both stylesheets present, neither rule matches the other's target.
 - **Settings window**: prefixes, none of Hazy's global hooks, layout and spacing, the −|+ stepper, the dot menu, the colour picker (square, hue, R/G/B, hex, copy), theme and transparent buttons, drag and keyboard reordering, Delete, two-step Reset, clean-up on close.
 - **Preview strip**: 24 px, 4 px radius, the bar's gradient over the bar's colour, the label and icon at the right-hand end, never matching the bar's selector; with the bar present, the same text size, weight and icon size as the bar.
-- **Settings**: own storage key, defaults, corrupt and old data → defaults + one warning, newer data left alone, the migration scaffold, debounced save and round-trip.
+- **Text colour, contrast unit tests**: known WCAG pairs; `#8372fd` → black (≈ 5.8:1); a dark-left / light-right gradient with the text at the right → black, the reverse → white; a light gradient with a dark stop inside the text region → white (where an average would say black); the sample set (edges, stops inside, 8 between) and premultiplied compositing over the bar's colour; theme stops resolved from `:root` at calculation time; the warning when neither reaches 4.5:1.
+- **Text colour on the live bar**: the text region is measured from the icon to the text's end, at the right-hand end; Auto, Black and White set the text span's and the icon's computed colours; Spotify default leaves them as Spotify draws them. Without the bar: the last region is kept, and the whole width counts before it has been seen.
+- **Recalculation**: debounced on settings changes and resize; on song and `:root` colour changes only while a theme-colour stop is used; the now-playing aside is watched.
+- **Text colour row**: a radiogroup of Auto, Black, White, Spotify default; clicks and keys apply live, in place, and are saved; the warning shows in the error colour; the checked button's label stays readable on a dark and a light theme colour.
+- **`status()`**: mode, chosen colour, worst-case contrast, text-region fractions, bar present, warning.
+- **Settings**: own storage key, defaults, corrupt and old data → defaults + one warning, settings from before the text colour option → Auto, newer data left alone, the migration scaffold, debounced save and round-trip.
 
 ## Visual checklist
 

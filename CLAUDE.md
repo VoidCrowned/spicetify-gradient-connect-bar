@@ -127,6 +127,8 @@ const SELECTOR = '[data-testid="now-playing-bar"] > .encore-bright-accent-set:ha
 ```css
 ${SELECTOR} {
   background-image: linear-gradient(to right, <stops>);
+  --text-base: <#000000 | #ffffff>;      /* Auto, Black, White; absent for Spotify default */
+  --essential-base: <#000000 | #ffffff>;
 }
 ```
 
@@ -134,18 +136,33 @@ ${SELECTOR} {
 - Solid: `linear-gradient(to right, <c>, <c>)`.
 - A **theme stop** is emitted as `var(--spice-button, var(--spice-text, #1db954))`, never a resolved hex.
 - A **transparent stop** is emitted as `transparent`; the bar's `background-color: var(--background-base)` shows through. Chromium interpolates gradients in premultiplied sRGB, so a colour fades into transparency without a grey band.
-- **A solid theme or transparent stop is inert**: no background rule, the bar keeps its own colour. With default settings the stylesheet is empty.
+- **A solid theme or transparent stop is inert**: no background rule, the bar keeps its own colour. With default settings the only declarations are the text colour (Auto, see below), which under Hazy is the same black Spotify uses.
 - `barImage()` is the one gradient string for the stylesheet, the preview strip and the self-test.
+
+## Text colour — #11–#17
+
+`settings.textColour`: `"auto"` (default) | `"black"` | `"white"` | `"default"`.
+
+- **Black / White** write `--text-base` and `--essential-base` as `#000000` / `#ffffff` into the bar's rule. **Spotify default** writes nothing. **Auto** writes the last calculated choice.
+- **Text region (#12):** `measureTextRegion(bar)`: the icon's left edge to the text button's right edge, as fractions of the bar's padding box. The bar is queried on demand, never stored. `textRegion` keeps the last measurement; before the bar has ever been seen (in this session) the whole width `{0, 1}` counts.
+- **Samples (#13):** `gradientSamples()`: both region edges, every stop position inside, `SAMPLES_BETWEEN` = 8 evenly spaced points between. Stops are resolved for the calculation only: theme → `getComputedStyle(document.documentElement)` `--spice-button` (via `themeHex()`), transparent → alpha 0, custom → its hex. Interpolation is premultiplied sRGB, as Chromium draws gradients; the result is composited over the bar's own colour (`barBase()`). An inert background samples as the bar's own colour.
+- **Pick:** `pickTextColour()`: WCAG contrast of black and of white against every sample; the colour whose **worst** contrast is higher wins (ties: black). Never an average: a dark stop under the text must not be outvoted by a light gradient (self-test scenario). If neither reaches 4.5:1 (`MIN_CONTRAST`), the better one is still used and `warning` is set (#16).
+- **Write (#14):** `recalcTextColour()` stores `textResult` and calls `applyCss()`, which regenerates the stylesheet with `buildCss(settings, appliedTextColour())`.
+- **Triggers (#15),** all through `scheduleTextColour()` (debounced, `TEXT_DELAY` = 100 ms): settings changes (`update()`); the bar appearing or changing (a MutationObserver on the `[data-testid="now-playing-bar"]` aside, `childList` + `subtree` + `characterData`, filtered to direct-child changes and mutations inside the bar; it also watches the aside's parent and re-attaches if the aside is replaced; before the aside exists, a body observer waits for it once); `resize`; and, while `followsTheme()` (a theme or transparent stop is active, or the background is inert), `songchange` and `:root` `style` mutations. Hazy sets its colour after the song change, not with it, hence the `:root` observer.
+- While the bar is gone, the last region and result are kept; settings changes recalculate with that region.
+- **UI (#11, #16):** a *Text colour* row under the Gradient row: a `radiogroup` of *Auto · Black · White · Spotify default* (ported from GPB's Spread row: roving tabindex, ←/→ wrap, Home/End, the checked button filled with `--spice-button` and its label in whichever of `--spice-text`/`--spice-main` contrasts more). The hint below gives the worst-case contrast; the warning is the same line in `--spice-notification-error` (class `gcb-warning`). The preview's label and icon use the applied colour, or Spotify's own for *Spotify default*.
+- **`status().textColour` (#17):** `mode`, `colour`, `contrast` (worst case for the chosen colour), `black`, `white`, `region` (`from`, `to`, `measured`), `barPresent`, `warning` (the hint text, or null).
 
 ## Data model — #2
 
 `Spicetify.LocalStorage`, key `gcb:settings`:
 
 ```json
-{ "version": 1, "gradient": false, "stops": [ { "id": "s1", "kind": "theme" } ] }
+{ "version": 1, "gradient": false, "textColour": "auto", "stops": [ { "id": "s1", "kind": "theme" } ] }
 ```
 
 - `kind` is `"theme"`, `"custom"` (with `"color": "#rrggbb"`) or `"transparent"`. 1–8 stops, unique ids.
+- `textColour` is optional and additive (schema `version` stays 1): missing → `"auto"` silently (settings saved before #11); any other value is invalid.
 - **Migrations:** `migrate()` runs `MIGRATIONS[n]` (version n → n + 1) until the data reaches `SCHEMA_VERSION`, then `validateSettings()`. The table is empty at version 1; a schema change bumps `SCHEMA_VERSION` and adds its step instead of dropping old settings. The self-test checks the loop with a temporary version-0 step.
 - Invalid or old data without a migration → defaults (written back) + one `[gcb]` warning. Data from a **newer** version → defaults in memory, one warning, the stored value left alone until the next save.
 - Apply CSS on every input event; persist debounced (250 ms), flushed on close and unload.
@@ -155,7 +172,7 @@ ${SELECTOR} {
 Ported from GPB (see its CLAUDE.md for the history); what differs is noted.
 
 - Entry: **right-click the Connect bar** (capture-phase `contextmenu` on `document`, `closest(SELECTOR)`, default prevented, propagation stopped) and `__gcb.openSettings()`.
-- Layout, top to bottom: Gradient row → **preview strip** → dots and the −|+ stepper → inline picker → action row (*Reset*, centred) → help text last.
+- Layout, top to bottom: Gradient row → **Text colour row** → **preview strip** → dots and the −|+ stepper → inline picker → action row (*Reset*, centred) → help text last.
 - **Preview strip (#7):** `.gcb-preview`, 24 px high, 4 px radius: `background-color` = the bar's own colour (`barBase()`), `background-image` = `barImage()` (or `none` when inert), and a fake "Playing on Device" label with a speaker icon at the right-hand end. The icon has **no `data-encore-id`** and the strip no Encore class, so it never matches `SELECTOR` or `UNSCOPED` (self-test). Many themes hide or blur the player behind the popup, and the real bar only exists during remote playback, so the strip is where changes are judged.
 - Gradient switch, dots (left-click selects, right-click menu Duplicate/Remove, drag reorders, Alt+arrows, Delete/Backspace), −|+ stepper, selection rules, inline colour picker, hex field with copy button, two-step Reset: as in GPB.
 - The picker has two kind buttons, stacked: **Use theme colour** (*Following theme colour*, disabled, on a theme stop) and **Make transparent** (*Transparent*, disabled, on a transparent stop; `title` "Let the bar's own colour show through"). Editing the colour turns either kind into a custom stop. A transparent stop's dot and swatch show a checkerboard; its picker value is the bar's own colour.
@@ -190,5 +207,5 @@ Devtools must be enabled (`spicetify enable-devtools`). The maintainer's setup: 
 
 ## Testing
 
-1. **Self-test (#9)** — `await __gcb.selfTest()` in devtools, ideally **while playing on another device**. Drives the extension programmatically, checks computed styles on the live bar, restores the user's settings afterwards, prints a table and copies a JSON report to the clipboard. Everything checkable by code lives here. Before a hand-off it is also run headless (Edge `--headless --dump-dom` against a page with a mock Spicetify and the verified bar markup, with and without the bar, with and without GPB loaded alongside).
+1. **Self-test (#9)** — `await __gcb.selfTest()` in devtools, ideally **while playing on another device**. Drives the extension programmatically, checks computed styles on the live bar, restores the user's settings afterwards, prints a table and copies a JSON report to the clipboard. Everything checkable by code lives here. Before a hand-off it is also run headless (Edge `--headless --dump-dom --virtual-time-budget` against a page with a mock Spicetify and the verified bar markup): with and without the bar, with GPB loaded alongside, with the bar or the whole aside appearing after start-up (the observer path), and two broken variants that must fail (bar outside the aside, two bars). Under virtual time CSS transitions don't advance, so checks that read a transitioning colour finish our own element's animations first.
 2. **Visual checklist** (`TESTING.md`) — only what a human has to see: how the gradient looks at 24 px, rounded corners, text readability, the preview matching the bar, the bar coming and going when switching devices, GPB alongside, Hazy's colour through transparent stops. ≤ 8 items.
