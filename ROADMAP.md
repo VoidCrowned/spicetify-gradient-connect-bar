@@ -2,7 +2,7 @@
 
 Mirrors the [GitHub milestones](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/milestones). Issues are the source of truth; this file and each milestone's tracking issue are kept in sync when they change.
 
-## Milestone 1 — Port & retarget
+## Milestone 1 — Port & retarget — done 2026-10-19
 
 Gradient Progress Bar's code, pointed at the Connect bar. Tracking: [#30](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/30).
 
@@ -19,7 +19,7 @@ Gradient Progress Bar's code, pointed at the Connect bar. Tracking: [#30](https:
 | [#9](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/9) | Self-test harness: `await __gcb.selfTest()` | testing | ✅ |
 | [#10](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/10) | Dev setup: link, register, apply | packaging | ✅ |
 
-## Milestone 2 — Text colour
+## Milestone 2 — Text colour — done 2026-10-19
 
 A *Text colour* setting: Auto (default), Black, White or Spotify default. Auto picks whichever of black and white has the higher worst-case contrast over the colours behind the text. Tracking: [#31](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/31).
 
@@ -33,7 +33,7 @@ A *Text colour* setting: Auto (default), Black, White or Spotify default. Auto p
 | [#16](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/16) | ~~Warn when neither black nor white is readable~~ superseded — no hint or warnings, user decides | ui | — |
 | [#17](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/17) | `__gcb.status()` reports the text colour | testing | ✅ |
 
-## Milestone 3 — GPB parity
+## Milestone 3 — GPB parity — done 2026-10-19
 
 The features GCB shares with Gradient Progress Bar. Tracking: [#37](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/37).
 
@@ -56,7 +56,7 @@ Tracking: [#32](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/is
 | [#21](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/21) | Tag and release v1.0.0 | packaging | ⬜ |
 | [#22](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/22) | Marketplace check | packaging, testing | ⬜ |
 
-Builds are handed over as `Test build <sha>` comments on the open milestone's tracking issue. See `CLAUDE.md → Working mode`; test procedure: [TESTING.md](TESTING.md).
+Milestones 1–3 were tested together: Void's self-test 170/170 on Spotify 1.3.5.3058 (v0.4.1), every visual checklist ticked. Builds are handed over as `Test build <sha>` comments on the open milestone's tracking issue. See `CLAUDE.md → Working mode`; test procedure: [TESTING.md](TESTING.md).
 
 ## Future
 
