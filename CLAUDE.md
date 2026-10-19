@@ -2,7 +2,7 @@
 
 A Spicetify extension that recolours Spotify's **Connect bar** (the "Playing on …" strip below the player while audio plays on another device) with one solid colour or a multi-stop gradient. It is a port of [Gradient Progress Bar](https://github.com/VoidCrowned/spicetify-gradient-progress-bar) (GPB, `E:\phpstorm_ws\spicetify-gradient-progress-bar`) pointed at a different element. It must coexist cleanly with themes, with GPB and with other extensions, because it's meant for the Spicetify Marketplace, not just the author's setup.
 
-Everything under *Verified facts* was confirmed from the live DOM (Spotify 1.3.4.258, Spicetify 2.45.3, Hazy with Custom colour `#8372fd`) or from the patched xpui CSS. Don't re-derive it and don't "improve" on it by guessing. If something depends on the live Spotify DOM and can't be known from this repo, **put a check for it into the self-test** instead of assuming.
+Everything under *Verified facts* was confirmed from the live DOM (Spotify 1.3.4.258; re-verified by the self-test on 1.3.5.3058, 169/170 with the one miss fixed in v0.4.1; Spicetify 2.45.3, Hazy with Custom colour `#8372fd`) or from the patched xpui CSS. Don't re-derive it and don't "improve" on it by guessing. If something depends on the live Spotify DOM and can't be known from this repo, **put a check for it into the self-test** instead of assuming.
 
 **GPB is read-only from this project.** Read it for reference; never modify, commit to or push anything there, and never read or write its storage key.
 
@@ -78,9 +78,9 @@ Markup of the Connect bar (Spotify 1.3.4.258). Hashed classes are unstable; neve
 
 - **The selector, defined once as `SELECTOR`:**
   `[data-testid="now-playing-bar"] > .encore-bright-accent-set:has(> svg[data-encore-id="icon"] + button[data-encore-id="textLink"])`. Specificity 0,4,2. `UNSCOPED` is the same without the `[data-testid="now-playing-bar"] >` prefix; the self-test counts both to tell "bar absent" from "parent changed".
-- The bar is **removed from the page** when playback returns to this computer. It only exists while playing on another device. There is exactly one `.encore-bright-accent-set` on the page while it exists.
+- The bar is **removed from the page** when playback returns to this computer. It only exists while playing on another device. On 1.3.4.258 it was the only `.encore-bright-accent-set` on the page; on 1.3.5.3058 two play buttons' inner spans carry the class as well (`span.encore-bright-accent-set` with an icon-wrapper child), so never select by the class alone. `SELECTOR` and `UNSCOPED` both still match exactly one element, because of the `:has(> svg[data-encore-id="icon"] + button[data-encore-id="textLink"])` part.
 - Background: `background-color: var(--background-base)`; `background-image` is `none`. Height 24 px, `border-radius: 4px`, no held Web Animations.
-- Text and icon colours come from `--text-base` (the span's `encore-internal-color-text-base`) and `--essential-base` (the icon's inline `--encore-icon-fill`). Both `#000000` under Hazy. The icon and text sit at the **right-hand end** of the bar.
+- Text and icon colours come from `--text-base` (the span's `encore-internal-color-text-base`) and `--essential-base` (the icon's inline `--encore-icon-fill`). Both `#000000` under Hazy. The icon and text sit at the **right-hand end** of the bar. The text span is `span[data-encore-id="text"].encore-text-body-small-bold.encore-internal-color-text-base`: **14 px, weight 700** (1.3.5.3058), icon 16 × 16; the preview strip's label matches (self-test).
 - Spicetify's patched `xpui-snapshot.css` defines `.encore-bright-accent-set { --background-base: var(--spice-button-active); --text-base: var(--spice-sidebar); --essential-base: var(--spice-sidebar); … }` (Spotify's own, unpatched: `#1ed760` and `#000`). That's the fallback for the bar's colour before the bar has been seen (`barBase()`), and for its text colour (`spotifyTextColour()`).
 
 ## Verified facts — coexistence

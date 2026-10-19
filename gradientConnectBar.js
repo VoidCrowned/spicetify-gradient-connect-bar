@@ -1,5 +1,5 @@
 // NAME: Gradient Connect Bar
-// VERSION: 0.4.0
+// VERSION: 0.4.1
 // AUTHOR: VoidCrowned
 // REPO: https://github.com/VoidCrowned/spicetify-gradient-connect-bar
 // DESCRIPTION: Recolours Spotify's Connect bar ("Playing on …") with a solid colour or a multi-stop gradient.
@@ -16,7 +16,7 @@
 (async function gcb() {
   "use strict";
 
-  const VERSION = "0.4.0";
+  const VERSION = "0.4.1";
   // Where this copy was loaded from: the Marketplace (jsDelivr) or the CLI (Extensions folder).
   // currentScript is only set before the first await, so capture it here.
   const SOURCE = document.currentScript?.src || null;
@@ -790,7 +790,7 @@
 .gcb-mode.gcb-on-light { color: var(--spice-main); }
 .gcb-mode:hover:not([aria-checked="true"]) { background-color: rgba(var(--spice-rgb-text), .1); }
 .gcb-mode:focus-visible { outline: 2px solid var(--spice-text); outline-offset: 2px; }
-.gcb-preview { display: flex; align-items: center; justify-content: flex-end; gap: 8px; box-sizing: border-box; height: 24px; padding: 0 12px; border-radius: 4px; overflow: hidden; font-size: .875rem; white-space: nowrap; }
+.gcb-preview { display: flex; align-items: center; justify-content: flex-end; gap: 8px; box-sizing: border-box; height: 24px; padding: 0 12px; border-radius: 4px; overflow: hidden; font-size: .875rem; font-weight: 700; white-space: nowrap; }
 .gcb-preview-icon { flex: none; }
 .gcb-dots { display: flex; align-items: flex-end; gap: 10px; }
 .gcb-stops { position: relative; display: flex; flex-wrap: wrap; gap: 14px; padding: 4px; }
