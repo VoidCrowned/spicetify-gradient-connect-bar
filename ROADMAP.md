@@ -33,7 +33,18 @@ A *Text colour* setting: Auto (default), Black, White or Spotify default. Auto p
 | [#16](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/16) | ~~Warn when neither black nor white is readable~~ superseded — no hint or warnings, user decides | ui | — |
 | [#17](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/17) | `__gcb.status()` reports the text colour | testing | ✅ |
 
-## Milestone 3 — Release 1.0.0
+## Milestone 3 — GPB parity
+
+The features GCB shares with Gradient Progress Bar. Tracking: [#37](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/37).
+
+| # | Issue | Area | Status |
+|---|---|---|---|
+| [#34](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/34) | Shared top-bar button with Gradient Progress Bar (protocol 1; opens directly when alone, a menu with both when both are installed) | ui, compatibility | ⬜ |
+| [#35](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/35) | Profile-menu entry (its own entry, guarded like GPB #27) | compatibility | ⬜ |
+| [#29](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/29) | Presets (built-in + your own); built-ins keep the text colour, own presets save it | ui, enhancement | ⬜ |
+| [#36](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/36) | Share codes: Export / Import, also GPB's `gpb1:` codes | ui, compatibility | ⬜ |
+
+## Milestone 4 — Release 1.0.0
 
 Tracking: [#32](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/32).
 
@@ -59,4 +70,4 @@ Agreed ideas, not scheduled. Tracking: [#33](https://github.com/VoidCrowned/spic
 | [#26](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/26) | ~~Per-colour opacity~~ dropped — no opacity, matching GPB ([VoidCrowned/spicetify-gradient-progress-bar#17](https://github.com/VoidCrowned/spicetify-gradient-progress-bar/issues/17)) | |
 | [#27](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/27) | ~~Gradient angle~~ dropped — not planned in GPB ([VoidCrowned/spicetify-gradient-progress-bar#16](https://github.com/VoidCrowned/spicetify-gradient-progress-bar/issues/16)) | |
 | [#28](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/28) | Custom stop positions | schema change |
-| [#29](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/29) | Presets | as in GPB |
+| [#29](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/29) | Presets | ➜ moved to Milestone 3 |
