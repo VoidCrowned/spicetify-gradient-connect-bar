@@ -2554,6 +2554,13 @@
       menuApplicable
         ? startup.entryErrors.filter((e) => e.startsWith("Menu:")).join("; ") || `registered${menuItemUsable() ? "" : ", hidden while Spicetify's MenuItem is broken (spicetify/cli#4012)"}`
         : `not applicable: Spicetify.Menu.Item ${api("Menu")?.Item ? "exists" : "missing"}, Spicetify.ReactJSX ${api("ReactJSX") ? "exists" : "missing"}`);
+    // Product names are written with every word capitalised (CLAUDE.md → Conventions): the profile-menu
+    // label, the settings window's title and the shared button's entry all match manifest.json's "name".
+    const MANIFEST_NAME = "Gradient Connect Bar";
+    const shownNames = { ENTRY_LABEL, "settings title": TITLE, "SELF.name": SELF.name };
+    const misnamed = Object.entries(shownNames).filter(([, value]) => value !== MANIFEST_NAME);
+    check(1, `Product name: ENTRY_LABEL, the settings window title and SELF.name all read "${MANIFEST_NAME}", the manifest name`,
+      !misnamed.length, misnamed.map(([key, value]) => `${key} "${value}"`).join(", ") || JSON.stringify(shownNames));
     check(34, "Entry icon is GPB's: currentColor, 16 × 16 viewBox, no id= and no <defs>",
       ENTRY_ICON.includes("currentColor") && ENTRY_ICON.includes('viewBox="0 0 16 16"') && !ENTRY_ICON.includes("id=") && !ENTRY_ICON.includes("<defs"),
       `${ENTRY_ICON.length} characters`);

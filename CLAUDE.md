@@ -55,6 +55,7 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 - Every id and class prefixed **`gcb-`**. Storage key `gcb:settings`. Console output prefixed **`[gcb]`**. Debug global `window.__gcb`. Never `gpb-`, `gpb:` or `__gpb` — those are GPB's.
 - Always `window.Spicetify?.x`, never bare `Spicetify?.x` (throws if the global doesn't exist).
 - UI strings and docs in **British English** ("colour").
+- Product names: **Gradient Connect Bar**, **Gradient Progress Bar**, every word capitalised (user-visible text, docs, issues). Spotify's element is 'the Connect bar'. The self-test checks `ENTRY_LABEL`, the settings window title and `SELF.name` against the manifest name.
 - Top-of-file comment block: name, version, author, repo link, and a short *Compatibility rules* section restating the hard rules below.
 - Code ported from GPB keeps its comments; references to GPB issues are written `GPB #48`, plain `#n` means this repo.
 - **No hints or warnings about the user's colour choices** (text contrast or otherwise): the user picks and judges the result. Debug values in `status()` are fine.
