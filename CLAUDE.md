@@ -2,7 +2,7 @@
 
 A Spicetify extension that recolours Spotify's **Connect bar** (the "Playing on …" strip below the player while audio plays on another device) with one solid colour or a multi-stop gradient. It is a port of [Gradient Progress Bar](https://github.com/VoidCrowned/spicetify-gradient-progress-bar) (GPB, `E:\phpstorm_ws\spicetify-gradient-progress-bar`) pointed at a different element. It must coexist cleanly with themes, with GPB and with other extensions, because it's meant for the Spicetify Marketplace, not just the author's setup.
 
-Everything under *Verified facts* was confirmed from the live DOM (Spotify 1.3.4.258; re-verified by the self-test on 1.3.5.3058, 169/170 with the one miss fixed in v0.4.1; Spicetify 2.45.3, Hazy with Custom colour `#8372fd`) or from the patched xpui CSS. Don't re-derive it and don't "improve" on it by guessing. If something depends on the live Spotify DOM and can't be known from this repo, **put a check for it into the self-test** instead of assuming.
+Everything under *Verified facts* was confirmed from the live DOM (Spotify 1.3.4.258; re-verified by the self-test on 1.3.5.3058: 170/170 on v0.4.1, with GPB 1.7.0 alongside; Spicetify 2.45.3, Hazy with Custom colour `#8372fd`) or from the patched xpui CSS. Don't re-derive it and don't "improve" on it by guessing. If something depends on the live Spotify DOM and can't be known from this repo, **put a check for it into the self-test** instead of assuming.
 
 **GPB is read-only from this project.** Read it for reference; never modify, commit to or push anything there, and never read or write its storage key.
 
