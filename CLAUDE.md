@@ -20,8 +20,8 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 
 ## Project management
 
-- Work is tracked as **GitHub issues** in the milestones *Milestone 1 — Port & retarget*, *Milestone 2 — Text colour*, *Milestone 3 — Release 1.0.0* and *Future*. Each milestone has one **tracking issue** (#30–#33) listing its issues as checkboxes. `ROADMAP.md` mirrors them — when you close, add or re-scope an issue, update `ROADMAP.md` and the tracking issue in the same change.
-- **Don't add the repo topic `spicetify-extensions` before Milestone 3**: the Marketplace lists every repo with it.
+- Work is tracked as **GitHub issues** in the milestones *Milestone 1 — Port & retarget*, *Milestone 2 — Text colour*, *Milestone 3 — GPB parity*, *Milestone 4 — Release 1.0.0* and *Future*. Each milestone has one **tracking issue** (#30–#33, #37) listing its issues as checkboxes. `ROADMAP.md` mirrors them — when you close, add or re-scope an issue, update `ROADMAP.md` and the tracking issue in the same change.
+- **Don't add the repo topic `spicetify-extensions` before Milestone 4 (the release)**: the Marketplace lists every repo with it.
 - The Marketplace loads the extension via jsDelivr `@main`. `purge-jsdelivr.yml` clears the cache on every push and release; `cdn-heal.yml` runs every 3 h and purges again whenever the CDN's `VERSION` differs from `main`'s. If the CDN lags, don't purge by hand repeatedly (purges get throttled); only if it's urgent: `gh workflow run purge-jsdelivr.yml`. GitHub switches the heal off after 60 days without repository activity; every push and release switches it back on.
 - Reference issues in commits (`Closes #6`), one logical change per commit where practical.
 - Ideas that come up during work but aren't in scope: open an issue in the `Future` milestone rather than implementing them.
@@ -44,7 +44,7 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 | `.github/workflows/purge-jsdelivr.yml` | Push, release and manual: re-enables `cdn-heal.yml`, purges jsDelivr `@main` and polls up to 20 min for the new `VERSION`. Throttling and a stale CDN are warnings. |
 | `.github/workflows/cdn-heal.yml` | Every 3 h (`23 */3 * * *`) and manually: purges again only while the CDN's `VERSION` differs from `main`'s. A separate file, because GitHub disables a whole scheduled workflow after 60 days without activity. |
 | `.github/scripts/purge-jsdelivr.sh` | The purge-and-poll logic both workflows run (`--if-stale` for the heal). |
-| `preview.png` | Marketplace screenshot (a placeholder until Milestone 3, #18). |
+| `preview.png` | Marketplace screenshot (a placeholder until Milestone 4, #18). |
 | `LICENSE` | WTFPL v2, byte-identical to GPB's and https://www.wtfpl.net/txt/copying/ (`.gitattributes` keeps it `-text`). |
 
 ## Conventions
@@ -105,9 +105,21 @@ Themes may give the dialog `backdrop-filter` or `transform` (Hazy blurs it), whi
 
 **Spotify's client refuses `navigator.clipboard.writeText`; use `Spicetify.Platform.ClipboardAPI.copy()`.** `writeClipboard(text)` tries `ClipboardAPI.copy` → `navigator.clipboard.writeText` (each raced against 1.5 s) → `document.execCommand("copy")` from a hidden textarea inside the modal root.
 
-### Spicetify entry points
+### Spicetify entry points — #34, #35
 
-**Don't use `Spicetify.Topbar.Button`** (never renders on Spotify 1.3.4 with Spicetify 2.45.3) **or `Spicetify.Menu.register()`** (throws when loaded as a local extension). The settings open by right-click on the bar and with `__gcb.openSettings()`.
+The settings open by **right-click on the bar** (only during remote playback), the **shared top-bar button**, our **profile-menu entry** and `__gcb.openSettings()`. The top bar and the profile menu are registered in parallel (`registerSpicetifyEntries()`), neither is the other's fallback (GPB #45). On Spotify 1.3.4+ with Spicetify ≤ 2.45.3 both need the maintainer's spicetify-fixes extension to show up (GPB #55); without it they stay hidden or off screen, and right-click and `openSettings()` still work. **Never ship a `MenuItem` swap, the top-bar class workaround or any other global Spicetify fix in this extension.**
+
+**Shared top-bar button, protocol 1 (#34)** — one button for GCB and GPB:
+
+- `window.__gradientBars = { protocol: 1, owner, entries, register(entry), refresh(), click(anchor) }`, created by whichever extension starts first (a synchronous check-and-set in `joinGradientBars()`, called before start-up awaits anything). The owner is the only one that creates a `Spicetify.Topbar.Button`. The shape is frozen for protocol 1; later protocols may only add fields.
+- Joining: protocol 1 → `register()` our entry, no button (role `member`). Another protocol → leave it alone, own button opening our settings (role `own button (protocol N)`). None → create it (role `owner`), register, create the button (waiting up to 15 s for `Spicetify.Topbar`).
+- Entries `{ id, name, open }`, sorted by name. Label: one entry → its name; two → "Gradient bars". `click()`: one entry → `entries[0].open()` directly (decision, Void can flip it); two → toggles the menu.
+- Menu: `#gradient-bars-menu` in `<body>`, appended once, hidden, never removed; its own `<style>` inside it; `role="menu"`, items `role="menuitem"` rebuilt on opening only; 8 px below the button, right edges aligned, clamped. Colours: `--spice-card` (fallback `--spice-main`), `--spice-text`, hover/focus `color-mix(in srgb, var(--spice-button) 20%, transparent)`. Opened from the keyboard (the click's `detail` is 0) → focus on the first item; ↑/↓ wrap, Home/End, Enter/Space activate, Escape closes and refocuses the button, Tab closes; outside pointerdown, window blur, resize and scroll close it. Activating hides the menu first, then calls `open()` in the next task. Ids and classes `gradient-bars-`, never `gcb-`/`gpb-`.
+- The code is one block between `// ── Shared entry (protocol 1) — keep identical in GCB and GPB ──` and `// ── End shared entry ──`, **identical in both files apart from `SELF`** (`{ id: "gcb", name: "Gradient Connect Bar", open: openSettings }`). It depends only on `SELF`, `ENTRY_ICON` and `window.Spicetify` (plus browser globals). GPB copies it byte for byte (GPB #58): change it in both or neither. `joinGradientBars({ self, key, prefix, createButton })` overrides exist for the self-test's separate test instance only.
+- `ENTRY_ICON` is GPB's, byte for byte (a brush over a progress bar), so the button looks the same whoever owns it.
+- `status().shared`: `{ protocol, role, owner, entries }`; `status().topbar`: `{ created, connected }`; `status().entryErrors`.
+
+**Profile menu (#35)** — our own entry, not part of the shared button: `new Spicetify.Menu.Item("Gradient Connect Bar", false, openSettings, ENTRY_ICON)`, after waiting for `Spicetify.ReactJSX.jsx` (every 250 ms, max 15 s; `Menu.Item`'s constructor calls it at once, and spicetify-bindings set it only after CLI extensions start, GPB #27). `shouldAdd` is wrapped with `menuItemUsable()` (ported unchanged from GPB): on builds whose `Spicetify.ReactComponent.MenuItem` is Spotify's V2-only item (spicetify/cli#4012) the entry stays hidden instead of breaking the profile menu, and appears by itself once it's fixed. `status().menu`: `{ registered, menuItemUsable }`; `status().apis.ReactJSX`. The self-test environment has `spicetifyFixes` (from `window.__fixes`, `null` when it isn't running, never relied on).
 
 ## Hard rules
 
@@ -171,21 +183,30 @@ ${SELECTOR} {
 - Invalid or old data without a migration → defaults (written back) + one `[gcb]` warning. Data from a **newer** version → defaults in memory, one warning, the stored value left alone until the next save.
 - Apply CSS on every input event; persist debounced (250 ms), flushed on close and unload.
 
+**Presets (#29)** live in their own key, `gcb:presets`, with their own version: `{ "version": 1, "presets": [ { "id": "p1", "name": "…", "settings": { "gradient", "textColour", "stops" } } ] }`. `gcb:settings` and `SCHEMA_VERSION` are untouched; GPB's `gpb:presets` is never read. Every preset's `settings` goes through `validateSettings()`. Invalid entries, duplicate ids and anything beyond **12** are dropped with one `[gcb]` warning per load; an unreadable key or unknown version gives an empty list and one warning. Names are trimmed, 1–24 characters, unique case-insensitively among own presets and the built-ins (a clash gets " (2)", " (3)"…; stored names that clash with a built-in are renamed on load, silently). Own ids `p1`, `p2`…; built-in ids `b:void`, `b:sunset`, `b:aurora`, `b:neon`, `b:fairy`.
+
+**Share codes (#36):** `gcb1:` + base64url (no padding) of `{ "g": 0|1, "x": "a"|"b"|"w"|"d", "s": ["t" | "rrggbb", …] }` (`x` = Auto, Black, White, Spotify default; `t` = theme stop). `decodeCode(text, current)` returns `{ settings, from: "gcb" | "gpb" }` or `null`; it trims whitespace and requires an exact prefix. **`gpb1:`** codes are decoded exactly as GPB's `decodeCode()` does — `g` 0/1, a valid Spread mode `m` (`c`, `a`, `s`), 1–8 valid stops — then `m` is dropped and `current`'s text colour kept. Anything else (unknown prefix, garbage, 9 stops, bad hex, unknown or missing `x`, a `gpb1:` without a valid `m`) → `null`. The five fixtures in #36 are shared with GPB's self-test; Export of the Void built-in with Auto gives exactly `gcb1:eyJnIjoxLCJ4IjoiYSIsInMiOlsiODM3MmZkIiwiNWE4MmZmIiwiODM3MmZkIl19`.
+
 ## UI behaviour — #5, #7
 
 Ported from GPB (see its CLAUDE.md for the history); what differs is noted.
 
-- Entry: **right-click the Connect bar** (capture-phase `contextmenu` on `document`, `closest(SELECTOR)`, default prevented, propagation stopped) and `__gcb.openSettings()`.
-- Layout, top to bottom: Gradient row → **Text colour row** → **preview strip** → dots and the −|+ stepper → inline picker → action row (*Reset*, centred) → help text last.
+- Entry: **right-click the Connect bar** (capture-phase `contextmenu` on `document`, `closest(SELECTOR)`, default prevented, propagation stopped), the shared top-bar button, the profile menu and `__gcb.openSettings()` (see *Spicetify entry points*).
+- Layout, top to bottom: Gradient row → **Text colour row** → **Presets row** → **preview strip** → dots and the −|+ stepper → inline picker → action row (*Reset*, centred) → help text last.
 - **Preview strip (#7):** `.gcb-preview`, 24 px high, 4 px radius: `background-color` = the bar's own colour (`barBase()`), `background-image` = `barImage()` (or `none` when inert), and a fake "Playing on Device" label with a speaker icon at the right-hand end. The icon has **no `data-encore-id`** and the strip no Encore class, so it never matches `SELECTOR` or `UNSCOPED` (self-test). Many themes hide or blur the player behind the popup, and the real bar only exists during remote playback, so the strip is where changes are judged.
 - Gradient switch, dots (left-click selects, right-click menu Duplicate/Remove, drag reorders, Alt+arrows, Delete/Backspace), −|+ stepper, selection rules, inline colour picker, hex field with copy button, two-step Reset: as in GPB.
 - The picker has one kind button, **Use theme colour** (*Following theme colour*, disabled, on a theme stop), as in GPB. Editing the colour turns a theme stop into a custom stop. No transparency or opacity control.
 - Theme swatches and the preview are kept live while the modal is open (MutationObserver on `:root` `style` + `songchange`), disconnected on close.
 - Modal colours only from Spicetify variables.
+- **Presets row (#29)**, ported from GPB 1.6.1 (see GPB's CLAUDE.md for the details) without Spread: label *Presets* with **Export** and **Import** on the right; two chip rows (the five built-ins; own presets and **+ Save**). Always two-step: the first click arms a chip (*Apply?*) and previews it in the strip, **text colour included** (`textColourFor()`: Black/White literally, Spotify's own for *Spotify default*, Auto computed for the previewed colours over the last text region); the second click applies. No timeout; Escape, blur or any other input disarms. Undo for 10 s after applying, importing or deleting. + Save and Rename use one inline name field; own chips have a menu (*Rename*, *Update to current colours*, *Delete*). Re-rendering the chips goes through `renderChipsLater()`; clicked nodes are hidden, never removed.
+- **Built-ins** (GPB's five, same ids and colours: Void, Sunset, Aurora, Neon, Fairy) change only the colours (gradient on + stops) and **keep the current text colour**; they match the current settings by colours only. **Own presets** save and restore the text colour too; they match on gradient, stops and text colour.
+- **Share codes (#36):** **Export** copies `encodeCode(settings)` through `writeClipboard()` and the button itself reads *Copied* with the check icon for 2 s; only if every tier fails does a selected read-only code field show. **Import** is an inline paste field (never `clipboard.readText()`): while it holds a valid code, the strip previews it (text colour included) and the status line reads *Previewing code — Apply to use it*; *Apply* or Enter applies with Undo (*Imported code*, or *Imported code from Gradient Progress Bar* for a `gpb1:` code); an invalid code gets *Not a valid code* and changes nothing.
+- `spotifyTextColour()` reads the live bar's text colour only while our rule doesn't set `--text-base` (otherwise it would read our own colour); else the last one read, else `--spice-sidebar`.
 
 ## Lifecycle
 
-- `window.__gcb = { version, status, selfTest, openSettings }` is defined at the top of the IIFE, **before any waiting**, so a stuck or failed start-up is visible via `__gcb.status()`.
+- `window.__gcb = { version, status, selfTest, openSettings }` is defined at the top of the IIFE, **before any waiting**, so a stuck or failed start-up is visible via `__gcb.status()`. Once registered, `__gcb.menuItem` and `__gcb.topbarButton` hold the profile-menu item and our top-bar button (if we own one).
+- Start-up order: settings and presets, the stylesheet (with the text colour), right-click, `joinGradientBars()` (synchronous), then phase *registering entry point* while the profile menu and the top bar register in parallel, then *ready*. The self-test waits up to 21 s for that phase to end.
 - Wait only for `LocalStorage`, `PopupModal`, `Player` (warn after 10 s which ones are missing).
 - Apply the stylesheet **before** registering the entry point.
 - Wrap start-up in `try/catch`; on failure set `status().phase = "failed"` with the stack and `console.error` it.
@@ -211,5 +232,5 @@ Devtools must be enabled (`spicetify enable-devtools`). The maintainer's setup: 
 
 ## Testing
 
-1. **Self-test (#9)** — `await __gcb.selfTest()` in devtools, ideally **while playing on another device**. Drives the extension programmatically, checks computed styles on the live bar, restores the user's settings afterwards, prints a table and copies a JSON report to the clipboard. Everything checkable by code lives here. Before a hand-off it is also run headless (Edge `--headless --dump-dom --virtual-time-budget` against a page with a mock Spicetify and the verified bar markup): with and without the bar, with GPB loaded alongside, with the bar or the whole aside appearing after start-up (the observer path), and two broken variants that must fail (bar outside the aside, two bars). Under virtual time CSS transitions don't advance, so checks that read a transitioning colour finish our own element's animations first.
+1. **Self-test (#9)** — `await __gcb.selfTest()` in devtools, ideally **while playing on another device**. Drives the extension programmatically, checks computed styles on the live bar, restores the user's settings afterwards, prints a table and copies a JSON report to the clipboard. Everything checkable by code lives here. Before a hand-off it is also run headless (Edge `--headless --dump-dom --virtual-time-budget` against a page with a mock Spicetify and the verified bar markup): with and without the bar, with GPB 1.6.1 loaded alongside, with a **fake GPB 1.7.0** (the shared block extracted from this file between its markers, only `SELF` swapped) loaded before and after GCB so either is the owner, with the bar or the whole aside appearing after start-up (the observer path), and two broken variants that must fail (bar outside the aside, two bars). The mock has `Topbar.Button`, `Menu.Item` (throwing without `ReactJSX`, like Spicetify's), `ReactJSX` and `ReactComponent.MenuItem`. Under virtual time CSS transitions don't advance, so checks that read a transitioning colour finish our own element's animations first.
 2. **Visual checklist** (`TESTING.md`) — only what a human has to see: how the gradient looks at 24 px, rounded corners, text readability, the preview matching the bar, the bar coming and going when switching devices, GPB alongside. ≤ 8 items.

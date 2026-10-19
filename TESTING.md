@@ -39,15 +39,21 @@ It covers:
 - **Recalculation**: debounced on settings changes and resize; on song and `:root` colour changes only while a theme-colour stop is used; the now-playing aside is watched.
 - **Text colour row**: a radiogroup of Auto, Black, White, Spotify default; no hint or warning under it in any mode (even where neither colour reads well), nothing logged, and the modal's normal gap down to the preview; clicks and keys apply live, in place, and are saved; the checked button's label stays readable on a dark and a light theme colour.
 - **`status()`**: mode, chosen colour, worst-case contrast, text-region fractions, bar present, as plain values; no warning.
+- **Entry points**: the profile-menu entry registers without throwing; the entry icon is GPB's; `status()` has `topbar`, `shared`, `entryErrors`, `menu` and `apis.ReactJSX`; our top-bar button exists (owner) or the owner's shared one has our entry (member); the live registry has protocol 1, our entry once, sorted by name; with a Gradient Progress Bar that shares the button, exactly one of the two has created it (skipped while GPB is 1.6.1 or older).
+- **Shared button protocol, on a separate test instance** (its own key and prefix, fake buttons, removed afterwards; the live registry is never touched): one entry opens directly; two entries give one *Gradient bars* button and a menu with both in name order, 8 px below the button with right edges aligned; keyboard (first item focused, ↑/↓ wrap, Home/End, Escape refocuses the button, Tab) and closing (outside pointerdown, blur, resize, a second click); activation hides first and opens in the next task; another protocol gives the own-button path.
+- **Presets**: the `gcb:presets` round-trip, invalid entries, the 12 limit, unique names, the built-ins (GPB's five, can't be changed, keep the text colour); the two-step preview and apply in the strip, text colour included; Escape, clicking elsewhere, moving the arm; the active chip; Undo; + Save, Rename, Update and Delete with Undo; own presets save and restore the text colour.
+- **Share codes**: the five fixtures from #36 (shared with GPB's self-test); Export of Void with Auto equals its fixture; round-trips for every text colour; invalid codes, including `gpb1:` codes GPB itself wouldn't accept; Import previews (text colour included), applies with Undo, *Imported code from Gradient Progress Bar* for `gpb1:`, which keeps the current text colour; Export's clipboard tiers and fallback field.
 - **Settings**: own storage key, defaults, corrupt and old data → defaults + one warning, settings from before the text colour option → Auto, newer data left alone, the migration scaffold, the 1 → 2 migration (a transparent, a half-transparent and an opaque stop → two opaque stops; only transparent stops → the defaults), debounced save and round-trip.
 
 ## Visual checklist
 
 At most 8 items, only what code can't check. Play on another device first.
 
-1. No hint text under any of the four text colour modes, and no gap where it was.
-2. No *Make transparent* button; the picker's right-hand column still looks balanced.
-3. Auto still picks a readable colour on a dark-to-light gradient.
-4. The preview strip still matches the real bar.
-5. The bar disappears and comes back cleanly when switching devices.
-6. Gradient Progress Bar is still fine alongside.
+1. The top-bar button opens GCB's settings directly. With Gradient Progress Bar 1.6.1 there are two buttons (GPB's own and the shared one); with a GPB that shares it, one button with a menu of both.
+2. The *Gradient Connect Bar* entry appears in the profile menu and opens the settings.
+3. Presets row: the chips look right, preview then apply works, the built-ins keep the text colour.
+4. Export shows *Copied*; pasting the code into Import previews it.
+5. A code exported from Gradient Progress Bar imports and keeps the current text colour.
+6. Auto picks a readable colour on a dark-to-light gradient, with no hint text under the switcher.
+7. The preview strip matches the real bar, and the bar disappears and comes back cleanly when switching devices.
+8. Gradient Progress Bar is still fine alongside.
