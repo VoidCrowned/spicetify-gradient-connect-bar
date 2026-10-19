@@ -56,6 +56,8 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 - UI strings and docs in **British English** ("colour").
 - Top-of-file comment block: name, version, author, repo link, and a short *Compatibility rules* section restating the hard rules below.
 - Code ported from GPB keeps its comments; references to GPB issues are written `GPB #48`, plain `#n` means this repo.
+- **No hints or warnings about the user's colour choices** (text contrast or otherwise): the user picks and judges the result. Debug values in `status()` are fine.
+- **No transparency or opacity**, matching GPB: colours are opaque everywhere (settings, CSS, parsing, contrast sampling).
 - **Never plan or implement a feature that GPB closed as not planned** (Void's rule). Before adding a roadmap item or issue, check `gh issue list -R VoidCrowned/spicetify-gradient-progress-bar --state closed --search "reason:not-planned"`. A matching GCB item is struck through in `ROADMAP.md` (`~~…~~ dropped — not planned in GPB (VoidCrowned/spicetify-gradient-progress-bar#N)`) and its issue closed as not planned with a pointer to the GPB issue.
 
 ## Verified facts — Spotify DOM
@@ -111,7 +113,7 @@ Themes may give the dialog `backdrop-filter` or `transform` (Hazy blurs it), whi
 
 1. **One injected stylesheet only** (`<style id="gcb-style">`, regenerated). No inline styles on Spotify elements, no stored references to the bar (Spotify removes and re-creates it). Querying the bar on demand to measure it is fine.
 2. **Only `SELECTOR`**, defined once. No hashed class names anywhere.
-3. Paint with `background-image: linear-gradient(to right, …)`. **Never change `--background-base`** (or `background-color`), so transparent stops show the bar's own colour through.
+3. Paint with `background-image: linear-gradient(to right, …)`, **opaque colours only** (no `rgba(`, `transparent` or 8-digit hex in the bar's CSS). **Never change `--background-base`** (or `background-color`).
 4. `--text-base` / `--essential-base` change **only inside the bar's own rule**, never globally.
 5. **No `!important`.** Win by specificity.
 6. The entry point is **one capture-phase `contextmenu` listener on `document`** checking `e.target.closest(SELECTOR)`, never a listener on the bar.
@@ -136,8 +138,8 @@ ${SELECTOR} {
 - Stops are evenly spaced across the bar's full width. **Static**: nothing follows playback; there are no Spread modes (#6).
 - Solid: `linear-gradient(to right, <c>, <c>)`.
 - A **theme stop** is emitted as `var(--spice-button, var(--spice-text, #1db954))`, never a resolved hex.
-- A **transparent stop** is emitted as `transparent`; the bar's `background-color: var(--background-base)` shows through. Chromium interpolates gradients in premultiplied sRGB, so a colour fades into transparency without a grey band.
-- **A solid theme or transparent stop is inert**: no background rule, the bar keeps its own colour. With default settings the only declarations are the text colour (Auto, see below), which under Hazy is the same black Spotify uses.
+- **No transparency** (Void's decision after testing v0.2.0, matching GPB): stops are theme or custom, always opaque. Transparent stops existed in v0.2.0; the 1 → 2 migration removes them.
+- **A solid theme colour is inert**: no background rule, the bar keeps its own colour. With default settings the only declarations are the text colour (Auto, see below), which under Hazy is the same black Spotify uses.
 - `barImage()` is the one gradient string for the stylesheet, the preview strip and the self-test.
 
 ## Text colour — #11–#17
@@ -146,25 +148,26 @@ ${SELECTOR} {
 
 - **Black / White** write `--text-base` and `--essential-base` as `#000000` / `#ffffff` into the bar's rule. **Spotify default** writes nothing. **Auto** writes the last calculated choice.
 - **Text region (#12):** `measureTextRegion(bar)`: the icon's left edge to the text button's right edge, as fractions of the bar's padding box. The bar is queried on demand, never stored. `textRegion` keeps the last measurement; before the bar has ever been seen (in this session) the whole width `{0, 1}` counts.
-- **Samples (#13):** `gradientSamples()`: both region edges, every stop position inside, `SAMPLES_BETWEEN` = 8 evenly spaced points between. Stops are resolved for the calculation only: theme → `getComputedStyle(document.documentElement)` `--spice-button` (via `themeHex()`), transparent → alpha 0, custom → its hex. Interpolation is premultiplied sRGB, as Chromium draws gradients; the result is composited over the bar's own colour (`barBase()`). An inert background samples as the bar's own colour.
-- **Pick:** `pickTextColour()`: WCAG contrast of black and of white against every sample; the colour whose **worst** contrast is higher wins (ties: black). Never an average: a dark stop under the text must not be outvoted by a light gradient (self-test scenario). If neither reaches 4.5:1 (`MIN_CONTRAST`), the better one is still used and `warning` is set (#16).
+- **Samples (#13):** `gradientSamples()`: both region edges, every stop position inside, `SAMPLES_BETWEEN` = 8 evenly spaced points between. Stops are resolved for the calculation only: theme → `getComputedStyle(document.documentElement)` `--spice-button` (via `themeHex()`), custom → its hex. The samples are the opaque stop colours themselves, interpolated in sRGB between them as the browser draws the gradient; no compositing. An inert background samples as the bar's own colour (`barBase()`).
+- **Pick:** `pickTextColour()`: WCAG contrast of black and of white against every sample; the colour whose **worst** contrast is higher wins (ties: black). Never an average: a dark stop under the text must not be outvoted by a light gradient (self-test scenario). If both are low, the better one is still used, silently.
 - **Write (#14):** `recalcTextColour()` stores `textResult` and calls `applyCss()`, which regenerates the stylesheet with `buildCss(settings, appliedTextColour())`.
-- **Triggers (#15),** all through `scheduleTextColour()` (debounced, `TEXT_DELAY` = 100 ms): settings changes (`update()`); the bar appearing or changing (a MutationObserver on the `[data-testid="now-playing-bar"]` aside, `childList` + `subtree` + `characterData`, filtered to direct-child changes and mutations inside the bar; it also watches the aside's parent and re-attaches if the aside is replaced; before the aside exists, a body observer waits for it once); `resize`; and, while `followsTheme()` (a theme or transparent stop is active, or the background is inert), `songchange` and `:root` `style` mutations. Hazy sets its colour after the song change, not with it, hence the `:root` observer.
+- **Triggers (#15),** all through `scheduleTextColour()` (debounced, `TEXT_DELAY` = 100 ms): settings changes (`update()`); the bar appearing or changing (a MutationObserver on the `[data-testid="now-playing-bar"]` aside, `childList` + `subtree` + `characterData`, filtered to direct-child changes and mutations inside the bar; it also watches the aside's parent and re-attaches if the aside is replaced; before the aside exists, a body observer waits for it once); `resize`; and, while `followsTheme()` (a theme stop is active, or the background is inert), `songchange` and `:root` `style` mutations. Hazy sets its colour after the song change, not with it, hence the `:root` observer.
 - While the bar is gone, the last region and result are kept; settings changes recalculate with that region.
-- **UI (#11, #16):** a *Text colour* row under the Gradient row: a `radiogroup` of *Auto · Black · White · Spotify default* (ported from GPB's Spread row: roving tabindex, ←/→ wrap, Home/End, the checked button filled with `--spice-button` and its label in whichever of `--spice-text`/`--spice-main` contrasts more). The hint below gives the worst-case contrast; the warning is the same line in `--spice-notification-error` (class `gcb-warning`). The preview's label and icon use the applied colour, or Spotify's own for *Spotify default*.
-- **`status().textColour` (#17):** `mode`, `colour`, `contrast` (worst case for the chosen colour), `black`, `white`, `region` (`from`, `to`, `measured`), `barPresent`, `warning` (the hint text, or null).
+- **UI (#11):** a *Text colour* row under the Gradient row: a `radiogroup` of *Auto · Black · White · Spotify default* (ported from GPB's Spread row: roving tabindex, ←/→ wrap, Home/End, the checked button filled with `--spice-button` and its label in whichever of `--spice-text`/`--spice-main` contrasts more). **No hint and no warning** under it, in any mode, and nothing in the console (Void's decision after testing v0.2.0: the user picks the text colour and judges the result; #16 superseded). The row sits the modal's normal gap above the preview. The preview's label and icon use the applied colour, or Spotify's own for *Spotify default*.
+- **`status().textColour` (#17),** for debugging, plain values only: `mode`, `colour`, `contrast` (worst case for the chosen colour), `black`, `white`, `region` (`from`, `to`, `measured`), `barPresent`. No warning flag or message.
 
 ## Data model — #2
 
 `Spicetify.LocalStorage`, key `gcb:settings`:
 
 ```json
-{ "version": 1, "gradient": false, "textColour": "auto", "stops": [ { "id": "s1", "kind": "theme" } ] }
+{ "version": 2, "gradient": false, "textColour": "auto", "stops": [ { "id": "s1", "kind": "theme" } ] }
 ```
 
-- `kind` is `"theme"`, `"custom"` (with `"color": "#rrggbb"`) or `"transparent"`. 1–8 stops, unique ids.
-- `textColour` is optional and additive (schema `version` stays 1): missing → `"auto"` silently (settings saved before #11); any other value is invalid.
-- **Migrations:** `migrate()` runs `MIGRATIONS[n]` (version n → n + 1) until the data reaches `SCHEMA_VERSION`, then `validateSettings()`. The table is empty at version 1; a schema change bumps `SCHEMA_VERSION` and adds its step instead of dropping old settings. The self-test checks the loop with a temporary version-0 step.
+- `kind` is `"theme"` or `"custom"` (with `"color": "#rrggbb"`, opaque). 1–8 stops, unique ids.
+- `textColour` is optional and additive: missing → `"auto"` silently (settings saved before #11); any other value is invalid.
+- **Migrations:** `migrate()` runs `MIGRATIONS[n]` (version n → n + 1) until the data reaches `SCHEMA_VERSION` (now 2), then `validateSettings()`. A schema change bumps `SCHEMA_VERSION` and adds its step instead of dropping old settings. The self-test checks the loop with a temporary version-0 step.
+- **1 → 2 (no transparency):** stops with `kind: "transparent"` or a `#rrggbbaa` colour with alpha `00` are dropped; other `#rrggbbaa` colours keep their RGB; if no stop is left, the defaults. Silent (no warning); an originally empty `stops` stays invalid.
 - Invalid or old data without a migration → defaults (written back) + one `[gcb]` warning. Data from a **newer** version → defaults in memory, one warning, the stored value left alone until the next save.
 - Apply CSS on every input event; persist debounced (250 ms), flushed on close and unload.
 
@@ -176,8 +179,8 @@ Ported from GPB (see its CLAUDE.md for the history); what differs is noted.
 - Layout, top to bottom: Gradient row → **Text colour row** → **preview strip** → dots and the −|+ stepper → inline picker → action row (*Reset*, centred) → help text last.
 - **Preview strip (#7):** `.gcb-preview`, 24 px high, 4 px radius: `background-color` = the bar's own colour (`barBase()`), `background-image` = `barImage()` (or `none` when inert), and a fake "Playing on Device" label with a speaker icon at the right-hand end. The icon has **no `data-encore-id`** and the strip no Encore class, so it never matches `SELECTOR` or `UNSCOPED` (self-test). Many themes hide or blur the player behind the popup, and the real bar only exists during remote playback, so the strip is where changes are judged.
 - Gradient switch, dots (left-click selects, right-click menu Duplicate/Remove, drag reorders, Alt+arrows, Delete/Backspace), −|+ stepper, selection rules, inline colour picker, hex field with copy button, two-step Reset: as in GPB.
-- The picker has two kind buttons, stacked: **Use theme colour** (*Following theme colour*, disabled, on a theme stop) and **Make transparent** (*Transparent*, disabled, on a transparent stop; `title` "Let the bar's own colour show through"). Editing the colour turns either kind into a custom stop. A transparent stop's dot and swatch show a checkerboard; its picker value is the bar's own colour.
-- Theme and transparent swatches and the preview are kept live while the modal is open (MutationObserver on `:root` `style` + `songchange`), disconnected on close.
+- The picker has one kind button, **Use theme colour** (*Following theme colour*, disabled, on a theme stop), as in GPB. Editing the colour turns a theme stop into a custom stop. No transparency or opacity control.
+- Theme swatches and the preview are kept live while the modal is open (MutationObserver on `:root` `style` + `songchange`), disconnected on close.
 - Modal colours only from Spicetify variables.
 
 ## Lifecycle
@@ -209,4 +212,4 @@ Devtools must be enabled (`spicetify enable-devtools`). The maintainer's setup: 
 ## Testing
 
 1. **Self-test (#9)** — `await __gcb.selfTest()` in devtools, ideally **while playing on another device**. Drives the extension programmatically, checks computed styles on the live bar, restores the user's settings afterwards, prints a table and copies a JSON report to the clipboard. Everything checkable by code lives here. Before a hand-off it is also run headless (Edge `--headless --dump-dom --virtual-time-budget` against a page with a mock Spicetify and the verified bar markup): with and without the bar, with GPB loaded alongside, with the bar or the whole aside appearing after start-up (the observer path), and two broken variants that must fail (bar outside the aside, two bars). Under virtual time CSS transitions don't advance, so checks that read a transitioning colour finish our own element's animations first.
-2. **Visual checklist** (`TESTING.md`) — only what a human has to see: how the gradient looks at 24 px, rounded corners, text readability, the preview matching the bar, the bar coming and going when switching devices, GPB alongside, Hazy's colour through transparent stops. ≤ 8 items.
+2. **Visual checklist** (`TESTING.md`) — only what a human has to see: how the gradient looks at 24 px, rounded corners, text readability, the preview matching the bar, the bar coming and going when switching devices, GPB alongside. ≤ 8 items.
