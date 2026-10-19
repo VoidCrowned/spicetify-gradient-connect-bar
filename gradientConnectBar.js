@@ -1,5 +1,5 @@
 // NAME: Gradient Connect Bar
-// VERSION: 0.2.0
+// VERSION: 0.3.0
 // AUTHOR: VoidCrowned
 // REPO: https://github.com/VoidCrowned/spicetify-gradient-connect-bar
 // DESCRIPTION: Recolours Spotify's Connect bar ("Playing on …") with a solid colour or a multi-stop gradient.
@@ -9,15 +9,14 @@
 //  1. One injected stylesheet (<style id="gcb-style">), fully regenerated. No inline styles on Spotify
 //     elements and no stored reference to the bar: Spotify removes and re-creates it.
 //  2. Every rule targets the Connect bar through SELECTOR only. No hashed class names.
-//  3. Paints background-image only. --background-base is never changed, so transparent stops show the
-//     bar's own colour.
+//  3. Paints background-image only, opaque colours only. --background-base is never changed.
 //  4. No !important — rules win by specificity only.
 //  5. Never reads or writes Gradient Progress Bar's storage key; both run side by side.
 
 (async function gcb() {
   "use strict";
 
-  const VERSION = "0.2.0";
+  const VERSION = "0.3.0";
   // Where this copy was loaded from: the Marketplace (jsDelivr) or the CLI (Extensions folder).
   // currentScript is only set before the first await, so capture it here.
   const SOURCE = document.currentScript?.src || null;
@@ -68,11 +67,11 @@
 
   const STORAGE_KEY = "gcb:settings";
   const GPB_STORAGE_KEY = "gpb:settings"; // Gradient Progress Bar's: never read or written, only compared (#2)
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 2; // 2: no transparency (MIGRATIONS[1])
   const MAX_STOPS = 8;
   const SAVE_DELAY = 250;
   const HEX_RE = /^#[0-9a-f]{6}$/i;
-  const KINDS = ["theme", "custom", "transparent"];
+  const KINDS = ["theme", "custom"]; // opaque only, like GPB
 
   // Never resolved to a hex, so it follows runtime theme changes (e.g. Hazy's per-song accent).
   const THEME_COLOUR = "var(--spice-button, var(--spice-text, #1db954))";
@@ -86,9 +85,23 @@
     return { version: SCHEMA_VERSION, gradient: false, textColour: DEFAULT_TEXT, stops: [{ id: "s1", kind: "theme" }] };
   }
 
-  // One step per schema version: MIGRATIONS[n] turns version-n data into version n + 1. Empty while
-  // the schema is at version 1; a future schema adds its step here instead of dropping older settings.
-  const MIGRATIONS = {};
+  // One step per schema version: MIGRATIONS[n] turns version-n data into version n + 1. A schema
+  // change adds its step here instead of dropping older settings.
+  const MIGRATIONS = {
+    // 1 → 2: transparency is gone. Fully transparent stops (kind "transparent", or a #rrggbbaa with
+    // alpha 00) are dropped, partly transparent ones (#rrggbbaa) keep their RGB. If that leaves no
+    // stops, the defaults. Anything else is passed on as it was, for validateSettings() to judge.
+    1: (data) => {
+      if (!Array.isArray(data.stops) || !data.stops.length) return { ...data, version: 2 };
+      const stops = data.stops.flatMap((stop) => {
+        if (stop?.kind === "transparent") return [];
+        const color = stop?.kind === "custom" && typeof stop.color === "string" ? stop.color : "";
+        if (!/^#[0-9a-f]{8}$/i.test(color)) return [stop];
+        return color.slice(7) === "00" ? [] : [{ ...stop, color: color.slice(0, 7) }];
+      });
+      return stops.length ? { ...data, version: 2, stops } : defaultSettings();
+    },
+  };
 
   function migrate(data) {
     let current = data;
@@ -113,7 +126,7 @@
     for (const stop of data.stops) {
       if (!stop || typeof stop.id !== "string" || !stop.id || ids.has(stop.id) || !KINDS.includes(stop.kind)) return null;
       ids.add(stop.id);
-      if (stop.kind !== "custom") stops.push({ id: stop.id, kind: stop.kind });
+      if (stop.kind === "theme") stops.push({ id: stop.id, kind: "theme" });
       else if (HEX_RE.test(stop.color)) stops.push({ id: stop.id, kind: "custom", color: stop.color.toLowerCase() });
       else return null;
     }
@@ -161,12 +174,12 @@
   // ── Rendering ───────────────────────────────────────────────────────────────
 
   function stopColour(stop) {
-    return stop.kind === "theme" ? THEME_COLOUR : stop.kind === "transparent" ? "transparent" : stop.color;
+    return stop.kind === "theme" ? THEME_COLOUR : stop.color;
   }
 
-  // A solid theme colour or a solid transparent stop leaves the bar its own colour: no background rule.
+  // A solid theme colour leaves the bar its own colour: no background rule.
   function isInert(s) {
-    return !s.gradient && s.stops[0].kind !== "custom";
+    return !s.gradient && s.stops[0].kind === "theme";
   }
 
   // The stops actually drawn: all of them for a gradient, otherwise just the first.
@@ -222,16 +235,15 @@
 
   let colourCtx = null;
 
-  // Any CSS colour → #rrggbb (alpha dropped), or null if it isn't a colour.
+  // Any opaque CSS colour → #rrggbb, or null if it isn't one. Colours are opaque only, like GPB's:
+  // the canvas serialises anything translucent as rgba(), which counts as no colour.
   function toHex(value) {
     if (!value || !CSS.supports("color", value)) return null;
     colourCtx ??= document.createElement("canvas").getContext("2d");
     colourCtx.fillStyle = "#000000";
     colourCtx.fillStyle = value;
-    const out = colourCtx.fillStyle; // "#rrggbb", or "rgba(r, g, b, a)" when translucent
-    if (out.startsWith("#")) return out;
-    const [r, g, b] = out.match(/[\d.]+/g);
-    return "#" + [r, g, b].map((n) => Math.round(+n).toString(16).padStart(2, "0")).join("");
+    const out = colourCtx.fillStyle;
+    return out.startsWith("#") ? out : null;
   }
 
   const rootColour = (name) => toHex(getComputedStyle(document.documentElement).getPropertyValue(name).trim());
@@ -239,49 +251,49 @@
   // The live theme colour a theme stop draws, as #rrggbb (the CSS itself uses THEME_COLOUR).
   const themeHex = () => rootColour("--spice-button") || rootColour("--spice-text") || "#1db954";
 
-  // The bar's own colour, which shows through transparent stops: the live bar's computed
-  // background-color (Spotify paints it with var(--background-base)), else the last one seen, else
-  // what Spicetify maps --background-base to for .encore-bright-accent-set: --spice-button-active.
+  // The bar's own colour, kept under a solid theme colour and shown under the preview: the live
+  // bar's computed background-color (Spotify paints it with var(--background-base)), else the last
+  // one seen, else what Spicetify maps --background-base to for .encore-bright-accent-set:
+  // --spice-button-active.
   let lastBarBase = null;
 
   function barBase() {
     const bar = findBar();
     if (bar) {
       const rgb = parseRgb(getComputedStyle(bar).backgroundColor);
-      if (rgb && rgb[3] === 1) lastBarBase = rgbToHex(rgb.slice(0, 3).map(Math.round));
+      if (rgb) lastBarBase = rgbToHex(rgb.map(Math.round));
     }
     return lastBarBase || rootColour("--spice-button-active") || themeHex();
   }
 
   // A stop's current colour as #rrggbb — for UI swatches and the picker only.
   function resolveStop(stop) {
-    if (stop.kind === "custom") return stop.color;
-    return stop.kind === "theme" ? themeHex() : barBase();
+    return stop.kind === "theme" ? themeHex() : stop.color;
   }
 
   const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
   const rgbToHex = (rgb) => "#" + rgb.map((n) => n.toString(16).padStart(2, "0")).join("");
 
-  // Computed colours come back as rgb(), rgba() or color(srgb …), with commas or spaces.
+  // Computed colours come back as rgb() or color(srgb …), with commas or spaces → [r, g, b] (0–255).
+  // Opaque only: anything with an alpha below 1 (rgba(), "transparent") gives null.
   function parseRgb(colour) {
     const srgb = /^color\(srgb\s/.test(colour);
     if (!srgb && !/^rgba?\(/.test(colour)) return null;
     const n = colour.match(/-?[\d.]+(?:e-?\d+)?/g)?.map(Number) ?? [];
-    if (n.length < 3 || n.some(Number.isNaN)) return null;
-    const rgb = n.slice(0, 3).map((v) => Math.min(255, Math.max(0, srgb ? v * 255 : v)));
-    return [...rgb, n[3] ?? 1];
+    if (n.length < 3 || n.some(Number.isNaN) || (n.length > 3 && n[3] < 1)) return null;
+    return n.slice(0, 3).map((v) => Math.min(255, Math.max(0, srgb ? v * 255 : v)));
   }
 
-  // The computed sRGB value of a CSS colour, as [r, g, b, a], read through caret-color on one of
+  // The computed sRGB value of a CSS colour, as [r, g, b], read through caret-color on one of
   // OUR elements (never Spotify's: no inline styles there). color-mix() converts to sRGB first.
   function computedRgb(el, colour) {
-    el.style.setProperty("caret-color", `color-mix(in srgb, ${colour} 100%, transparent)`);
+    el.style.setProperty("caret-color", `color-mix(in srgb, ${colour}, ${colour})`);
     const rgb = parseRgb(getComputedStyle(el).caretColor);
     el.style.removeProperty("caret-color");
     return rgb;
   }
 
-  // WCAG 2 relative luminance and contrast ratio (alpha ignored).
+  // WCAG 2 relative luminance and contrast ratio.
   function luminance([r, g, b]) {
     const lin = (v) => ((v /= 255) <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
     return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
@@ -300,7 +312,6 @@
 
   const BLACK = "#000000";
   const WHITE = "#ffffff";
-  const MIN_CONTRAST = 4.5; // WCAG AA for normal-size text
   const TEXT_DELAY = 100; // debounce for recalculations (#15)
   const SAMPLES_BETWEEN = 8; // evenly spaced samples between the text region's edges (#13)
 
@@ -335,32 +346,21 @@
   // What the stops resolve to: the live theme colour from :root and the bar's own colour, as RGB.
   const textContext = () => ({ theme: hexToRgb(themeHex()), base: hexToRgb(barBase()) });
 
-  function stopRgba(stop, { theme }) {
-    if (stop.kind === "theme") return [...theme, 1];
-    if (stop.kind === "transparent") return [0, 0, 0, 0];
-    return [...hexToRgb(stop.color), 1];
-  }
+  const stopRgb = (stop, { theme }) => (stop.kind === "theme" ? theme : hexToRgb(stop.color));
 
   // The colours behind the text (#13): both edges of the region, every stop inside it and 8 evenly
-  // spaced points in between. Like the browser, stops interpolate in premultiplied sRGB; anything
-  // transparent is composited over the bar's own colour (`base`). An inert background is just
-  // the bar's own colour.
+  // spaced points in between, interpolated in sRGB between the opaque stop colours, as the
+  // browser draws the gradient. An inert background is just the bar's own colour (`base`).
   function gradientSamples(s, { from, to }, ctx) {
-    const colours = isInert(s) ? [[...ctx.base, 1]] : activeStops(s).map((stop) => stopRgba(stop, ctx));
+    const colours = isInert(s) ? [ctx.base] : activeStops(s).map((stop) => stopRgb(stop, ctx));
     const last = colours.length - 1;
     const positions = colours.map((_, i) => (last ? i / last : 0));
     const colourAt = (t) => {
-      let c = colours[0];
-      if (last) {
-        const x = clamp(t, 0, 1) * last;
-        const k = Math.min(Math.floor(x), last - 1);
-        const u = x - k;
-        const [a, b] = [colours[k], colours[k + 1]];
-        const alpha = a[3] + (b[3] - a[3]) * u;
-        const premultiplied = [0, 1, 2].map((i) => a[i] * a[3] + (b[i] * b[3] - a[i] * a[3]) * u);
-        c = alpha ? [...premultiplied.map((v) => v / alpha), alpha] : [0, 0, 0, 0];
-      }
-      return [0, 1, 2].map((i) => c[i] * c[3] + ctx.base[i] * (1 - c[3]));
+      if (!last) return colours[0];
+      const x = clamp(t, 0, 1) * last;
+      const k = Math.min(Math.floor(x), last - 1);
+      const u = x - k;
+      return [0, 1, 2].map((i) => colours[k][i] + (colours[k + 1][i] - colours[k][i]) * u);
     };
     const between = Array.from({ length: SAMPLES_BETWEEN }, (_, k) => from + ((to - from) * (k + 1)) / (SAMPLES_BETWEEN + 1));
     const inside = positions.filter((p) => p > from && p < to);
@@ -368,12 +368,12 @@
   }
 
   // Black or white, whichever has the higher worst contrast over all samples (ties: black, as
-  // Spotify draws it). `warning` when neither reaches 4.5:1 (#16); the better one is still picked.
+  // Spotify draws it). No warning when both are low: the user picks and judges the result.
   function pickTextColour(samples) {
     const worst = (rgb) => Math.min(...samples.map((sample) => contrast(rgb, sample.rgb)));
     const black = worst([0, 0, 0]);
     const white = worst([255, 255, 255]);
-    return { colour: white > black ? WHITE : BLACK, black, white, warning: Math.max(black, white) < MIN_CONTRAST };
+    return { colour: white > black ? WHITE : BLACK, black, white };
   }
 
   // Measures the bar if it's there (otherwise the last region is kept, or the whole width before
@@ -395,7 +395,6 @@
       contrast: colour === BLACK ? pick.black : colour === WHITE ? pick.white : null,
       black: pick.black,
       white: pick.white,
-      warning: mode !== "default" && pick.warning,
       region: used,
       measured: !region && !!textRegion,
       barPresent: !!bar,
@@ -415,10 +414,10 @@
     textTimer = setTimeout(recalcTextColour, TEXT_DELAY);
   }
 
-  // Theme colours (and the bar's own colour behind transparent stops) change at runtime: Hazy
+  // Theme colours (and the bar's own colour under a solid theme colour) change at runtime: Hazy
   // rewrites them on :root after every song change.
   const followsTheme = (s = settings) =>
-    s.textColour !== "default" && (isInert(s) || activeStops(s).some((stop) => stop.kind !== "custom"));
+    s.textColour !== "default" && (isInert(s) || activeStops(s).some((stop) => stop.kind === "theme"));
 
   // Recalculation triggers (#15): the bar appearing or changing (an observer on the now-playing
   // aside), the window resizing, and — while a theme-colour stop is used — song changes and
@@ -493,8 +492,8 @@
     duplicateStop(settings.stops[settings.stops.length - 1].id);
   }
 
-  // Inserts a copy directly after the stop (a theme or transparent stop keeps its kind) and selects
-  // it. Returns the copy's id.
+  // Inserts a copy directly after the stop (a theme stop stays a theme stop) and selects it.
+  // Returns the copy's id.
   function duplicateStop(id) {
     const index = settings.stops.findIndex((s) => s.id === id);
     if (index === -1 || settings.stops.length >= MAX_STOPS) return id;
@@ -534,7 +533,7 @@
     update();
   }
 
-  // Editing a theme or transparent stop's colour turns it into a custom stop.
+  // Editing a theme stop's colour turns it into a custom stop.
   function setStopColour(id, colour) {
     const stop = findStop(id);
     stop.kind = "custom";
@@ -551,11 +550,10 @@
     update();
   }
 
-  // Called from the picker ("Use theme colour", "Make transparent"), so the dots are updated in
-  // place, not re-rendered.
-  function setStopKind(id, kind) {
+  // Called from the picker ("Use theme colour"), so the dots are updated in place, not re-rendered.
+  function linkStopToTheme(id) {
     const stop = findStop(id);
-    stop.kind = kind;
+    stop.kind = "theme";
     delete stop.color;
     update({ rerender: false });
   }
@@ -582,16 +580,13 @@
 .gcb-switch[aria-checked="true"] { background-color: var(--spice-button); }
 .gcb-switch[aria-checked="true"]::after { transform: translateX(18px); }
 .gcb-switch:focus-visible { outline: 2px solid var(--spice-text); outline-offset: 2px; }
-.gcb-text { display: flex; flex-direction: column; gap: 8px; }
-.gcb-text-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.gcb-text { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .gcb-modes { display: flex; gap: 2px; padding: 2px; border-radius: 500px; background-color: rgba(var(--spice-rgb-text), .1); }
 .gcb-mode { padding: 4px 12px; border: 1px solid transparent; border-radius: 500px; background: none; color: var(--spice-text); font: inherit; font-size: .875rem; font-weight: 700; white-space: nowrap; cursor: pointer; transition: background-color .15s; }
 .gcb-mode[aria-checked="true"] { background-color: var(--spice-button); }
 .gcb-mode.gcb-on-light { color: var(--spice-main); }
 .gcb-mode:hover:not([aria-checked="true"]) { background-color: rgba(var(--spice-rgb-text), .1); }
 .gcb-mode:focus-visible { outline: 2px solid var(--spice-text); outline-offset: 2px; }
-.gcb-text-hint { margin: 0; font-size: .75rem; line-height: 1.4; color: var(--spice-subtext); }
-.gcb-text-hint.gcb-warning { color: var(--spice-notification-error, #e91429); }
 .gcb-preview { display: flex; align-items: center; justify-content: flex-end; gap: 8px; box-sizing: border-box; height: 24px; padding: 0 12px; border-radius: 4px; overflow: hidden; font-size: .875rem; white-space: nowrap; }
 .gcb-preview-icon { flex: none; }
 .gcb-dots { display: flex; align-items: flex-end; gap: 10px; }
@@ -657,10 +652,6 @@
   // than a container query: inline-size containment could collapse a shrink-to-fit modal.
   const PICKER_COLUMNS_MIN = 420;
 
-  // A transparent stop's dot and swatch: a checkerboard, the usual sign for "see-through".
-  const CHECKERBOARD =
-    "repeating-conic-gradient(rgba(var(--spice-rgb-text), .45) 0 25%, rgba(var(--spice-rgb-text), .1) 0 50%) 50% / 10px 10px";
-
   const TITLE = "Gradient Connect Bar";
   const REORDER_HINT = "Drag or Alt+←/→ to reorder"; // second line of the dot tooltip
   const HELP_LINES = [ // one line each, joined with <br>
@@ -674,8 +665,6 @@
   const REMOVE_LABEL = "Remove selected colour"; // the stepper's −
   const REMOVE_LAST_LABEL = "At least one colour";
   const THEME_LABELS = { off: "Use theme colour", on: "Following theme colour" };
-  const TRANSPARENT_LABELS = { off: "Make transparent", on: "Transparent" };
-  const TRANSPARENT_TITLE = "Let the bar's own colour show through";
   const MINUS_ICON =
     '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M2 7.25h12v1.5H2z"/></svg>';
   const PLUS_ICON =
@@ -718,13 +707,10 @@
         <button type="button" class="gcb-switch" role="switch" aria-labelledby="gcb-gradient-label"></button>
       </div>
       <div class="gcb-text">
-        <div class="gcb-text-row">
-          <span class="gcb-label" id="gcb-text-label">Text colour</span>
-          <div class="gcb-modes" role="radiogroup" aria-labelledby="gcb-text-label" aria-describedby="gcb-text-hint">
-            ${TEXT_MODES.map((mode) => `<button type="button" class="gcb-mode" role="radio" data-mode="${mode}">${TEXT_LABELS[mode]}</button>`).join("")}
-          </div>
+        <span class="gcb-label" id="gcb-text-label">Text colour</span>
+        <div class="gcb-modes" role="radiogroup" aria-labelledby="gcb-text-label">
+          ${TEXT_MODES.map((mode) => `<button type="button" class="gcb-mode" role="radio" data-mode="${mode}">${TEXT_LABELS[mode]}</button>`).join("")}
         </div>
-        <p class="gcb-text-hint" id="gcb-text-hint"></p>
       </div>
       <div class="gcb-preview" role="img" aria-label="Preview of the Connect bar">${withClass(DEVICE_ICON, "gcb-preview-icon")}<span class="gcb-preview-label">${PREVIEW_LABEL}</span></div>
       <div class="gcb-dots">
@@ -755,7 +741,6 @@
             </span>
           </div>
           <button type="button" class="gcb-button gcb-use-theme">${THEME_LABELS.off}</button>
-          <button type="button" class="gcb-button gcb-use-transparent" title="${TRANSPARENT_TITLE}">${TRANSPARENT_LABELS.off}</button>
         </div>
       </div>
       <div class="gcb-actions">
@@ -768,9 +753,9 @@
       gradientRow: root.querySelector(".gcb-gradient-row"),
       switchButton: root.querySelector(".gcb-switch"),
       text: root.querySelector(".gcb-text"),
+      textLabel: root.querySelector("#gcb-text-label"),
       textModes: root.querySelector(".gcb-modes"),
       textButtons: [...root.querySelectorAll(".gcb-mode")],
-      textHint: root.querySelector(".gcb-text-hint"),
       preview: root.querySelector(".gcb-preview"),
       previewIcon: root.querySelector(".gcb-preview-icon"),
       previewLabel: root.querySelector(".gcb-preview-label"),
@@ -801,7 +786,6 @@
       hexCopyIcon: root.querySelector(".gcb-hex-copy-icon"),
       hexCopyCheck: root.querySelector(".gcb-hex-copy-check"),
       useThemeButton: root.querySelector(".gcb-use-theme"),
-      transparentButton: root.querySelector(".gcb-use-transparent"),
       cleanups: [],
     };
 
@@ -853,19 +837,18 @@
     content.style.paddingBottom = getComputedStyle(content).paddingLeft;
   }
 
-  // ── Text colour row (#11, #16) ──
+  // ── Text colour row (#11) ──
   // A radiogroup of plain buttons (no <select>: Hazy styles select globally), ported from GPB's
   // Spread row. Built once per open and only updated in place, so a click never detaches its
   // target. Roving tabindex; ←/→ (wrapping), Home and End move the choice, without modifier keys.
-  // The hint under it gives the worst-case contrast, and the warning when nothing reaches 4.5:1.
+  // No hint and no warning under it: the user picks the text colour and judges the result.
 
   const TEXT_LABELS = { auto: "Auto", black: "Black", white: "White", default: "Spotify default" };
-  const COLOUR_NAMES = { [BLACK]: "Black", [WHITE]: "White" };
 
   function setTextColour(mode) {
     if (!TEXT_MODES.includes(mode) || mode === settings.textColour) return;
     settings.textColour = mode;
-    recalcTextColour(); // at once: the row's hint shows the new contrast straight away
+    recalcTextColour(); // at once: the bar and the preview show the new colour straight away
     update({ rerender: false });
   }
 
@@ -887,27 +870,7 @@
     });
   }
 
-  // The hint for the current mode and result.
-  function textHint(r = textResult, mode = settings.textColour) {
-    if (mode === "default") return { text: "Spotify and your theme colour the text; nothing is changed.", warning: false };
-    if (!r) return { text: "", warning: false };
-    const ratio = (n) => `${n.toFixed(1)}:1`;
-    const where = r.measured ? "" : " Measured across the whole bar until the bar has been seen.";
-    const name = COLOUR_NAMES[r.colour];
-    if (mode === "auto" && r.warning)
-      return {
-        text: `Neither black nor white reaches 4.5:1 behind the text; ${name.toLowerCase()} is the better one (${ratio(r.contrast)}). ` +
-          `Lighter or darker colours there will help.${where}`,
-        warning: true,
-      };
-    if (mode === "auto") return { text: `${name}: at least ${ratio(r.contrast)} against the colours behind the text.${where}`, warning: false };
-    const other = r.colour === BLACK ? WHITE : BLACK;
-    const low = r.contrast < MIN_CONTRAST;
-    const better = low && (other === WHITE ? r.white : r.black) > r.contrast ? ` Auto would pick ${COLOUR_NAMES[other].toLowerCase()} (${ratio(other === WHITE ? r.white : r.black)}).` : "";
-    return { text: `${name}: at least ${ratio(r.contrast)} against the colours behind the text${low ? ", below 4.5:1" : ""}.${better}${where}`, warning: low };
-  }
-
-  // In place: aria-checked, tabindex, the label colour on the filled button, the hint.
+  // In place: aria-checked, tabindex, the label colour on the filled button.
   function renderTextColour() {
     const onLight = labelOnLight(modal.textModes);
     for (const button of modal.textButtons) {
@@ -916,9 +879,6 @@
       button.tabIndex = checked ? 0 : -1;
       button.classList.toggle("gcb-on-light", checked && onLight);
     }
-    const hint = textHint();
-    modal.textHint.textContent = hint.text;
-    modal.textHint.classList.toggle("gcb-warning", hint.warning);
   }
 
   // True when --spice-main contrasts more with the live --spice-button than --spice-text (GPB #43):
@@ -1210,8 +1170,7 @@
   // ── Colour picker ──
   // Chromium's native picker popup is browser chrome and can't be extended, so this mirrors its
   // layout — saturation/value square, eyedropper, swatch, hue bar, R/G/B — and adds a hex field,
-  // "Use theme colour" and "Make transparent". It's an inline panel that always edits the selected
-  // dot. Edits apply live and update the dot in place: the dots row is never re-rendered by them.
+  // "Use theme colour". It's an inline panel that always edits the selected dot. Edits apply live and update the dot in place: the dots row is never re-rendered by them.
 
   let pickerHsv = { h: 0, s: 0, v: 0 }; // kept apart from the hex so hue survives greys and black
   let lastDragEnd = -Infinity; // set by drag-and-drop; a click right after a drag is ignored
@@ -1237,7 +1196,7 @@
   const pickerStop = () => (modal ? findStop(selectedId) : null);
 
   // ── Hex copy button ──
-  // Copies the selected stop's colour as #rrggbb (a theme or transparent stop's resolved colour),
+  // Copies the selected stop's colour as #rrggbb (a theme stop's resolved colour),
   // never the field's text, so half-typed or invalid input can't be copied. Through
   // writeClipboard(); the icon turns into a check for HEX_COPIED_MS. Nothing else changes.
 
@@ -1284,7 +1243,7 @@
     m.sv.setAttribute("aria-valuetext", `Saturation ${Math.round(s * 100)}%, brightness ${Math.round(v * 100)}%`);
     m.hueHandle.style.left = `${(h / 360) * 100}%`;
     m.hue.setAttribute("aria-valuenow", String(Math.round(h)));
-    paintSwatch(m.swatch, stop);
+    m.swatch.style.backgroundColor = hex;
     if (from !== "rgb")
       hexToRgb(hex).forEach((n, i) => {
         m.rgb[i].value = String(n);
@@ -1294,22 +1253,13 @@
       m.hex.value = hex;
       m.hex.setAttribute("aria-invalid", "false");
     }
-    for (const [button, kind, labels] of [[m.useThemeButton, "theme", THEME_LABELS], [m.transparentButton, "transparent", TRANSPARENT_LABELS]]) {
-      const on = stop.kind === kind;
-      button.disabled = on;
-      button.textContent = on ? labels.on : labels.off;
-    }
+    const isTheme = stop.kind === "theme";
+    m.useThemeButton.disabled = isTheme;
+    m.useThemeButton.textContent = isTheme ? THEME_LABELS.on : THEME_LABELS.off;
   }
 
-  // A dot or the picker swatch: the stop's colour, a checkerboard for a transparent stop.
-  function paintSwatch(el, stop) {
-    const transparent = stop.kind === "transparent";
-    el.style.background = transparent ? CHECKERBOARD : "";
-    el.style.backgroundColor = transparent ? "" : resolveStop(stop);
-  }
-
-  // Applies a colour to the picker's stop: bar, preview and dot update in place; a theme or
-  // transparent stop becomes custom. Colours from the square or hue bar keep their exact HSV.
+  // Applies a colour to the picker's stop: bar, preview and dot update in place; a theme stop
+  // becomes custom. Colours from the square or hue bar keep their exact HSV.
   function commitPickerColour(hex, from = null) {
     const stop = pickerStop();
     if (!stop) return;
@@ -1412,18 +1362,15 @@
     m.hexCopy.addEventListener("click", () => copyHex(m));
     m.cleanups.push(() => clearTimeout(m.hexCopiedTimer));
 
-    // "Use theme colour" and "Make transparent" are disabled once the stop has that kind, so focus
-    // moves on to the hex field first.
-    for (const [button, kind] of [[m.useThemeButton, "theme"], [m.transparentButton, "transparent"]])
-      button.addEventListener("click", () => {
-        const stop = pickerStop();
-        if (!stop || stop.kind === kind) return;
-        const hadFocus = document.activeElement === button;
-        setStopKind(stop.id, kind);
-        renderStop(stop);
-        showInPicker(stop);
-        if (hadFocus) m.hex.focus({ preventScroll: true });
-      });
+    m.useThemeButton.addEventListener("click", () => {
+      const stop = pickerStop();
+      if (!stop || stop.kind === "theme") return;
+      const hadFocus = document.activeElement === m.useThemeButton; // it's about to be disabled
+      linkStopToTheme(stop.id);
+      renderStop(stop);
+      showInPicker(stop);
+      if (hadFocus) m.hex.focus({ preventScroll: true });
+    });
 
     m.eyedropper?.addEventListener("click", async () => {
       const id = selectedId;
@@ -1541,15 +1488,15 @@
   }
 
   // Themes like Hazy rewrite --spice-button inline on :root (e.g. on every songchange), so keep
-  // the theme and transparent swatches and the preview current while the modal is open.
+  // the theme swatches and the preview current while the modal is open.
   function watchThemeColour(m) {
     const sync = () => {
       if (modal !== m) return;
       renderTextColour(); // the checked button's label colour depends on the live --spice-button
       renderPreview();
-      for (const stop of settings.stops) if (stop.kind !== "custom") renderStop(stop);
+      for (const stop of settings.stops) if (stop.kind === "theme") renderStop(stop);
       const stop = pickerStop();
-      if (stop && stop.kind !== "custom") showInPicker(stop, document.activeElement === m.hex ? "hex" : null);
+      if (stop?.kind === "theme") showInPicker(stop, document.activeElement === m.hex ? "hex" : null);
     };
     modalObserver(m, sync).observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
     Spicetify.Player.addEventListener("songchange", sync);
@@ -1656,19 +1603,17 @@
     row.appendChild(marker);
   }
 
-  const STOP_NAMES = { theme: "Theme colour", transparent: "Transparent" };
-
   // Updates one dot in place.
   function renderStop(stop) {
     const el = modal?.stopsRow.querySelector(`.gcb-stop[data-id="${stop.id}"]`);
     if (!el) return;
-    const name = STOP_NAMES[stop.kind] ?? stop.color;
-    paintSwatch(el, stop);
-    el.classList.toggle("gcb-theme", stop.kind === "theme");
-    el.classList.toggle("gcb-transparent", stop.kind === "transparent");
+    const colour = resolveStop(stop);
+    const isTheme = stop.kind === "theme";
+    el.style.backgroundColor = colour;
+    el.classList.toggle("gcb-theme", isTheme);
     const count = settings.stops.length;
-    el.title = name + (count > 1 ? `\n${REORDER_HINT}` : "");
-    el.setAttribute("aria-label", `Colour ${el.dataset.index} of ${count}: ${stop.kind === "custom" ? name : name.toLowerCase()}`);
+    el.title = (isTheme ? "Theme colour" : colour) + (count > 1 ? `\n${REORDER_HINT}` : "");
+    el.setAttribute("aria-label", `Colour ${el.dataset.index} of ${count}: ${isTheme ? "theme colour" : colour}`);
   }
 
   // ── Self-test ───────────────────────────────────────────────────────────────
@@ -1687,7 +1632,6 @@
   const tick = () => new Promise((r) => setTimeout(r, 0));
   const custom = (id, color) => ({ id, kind: "custom", color });
   const theme = (id) => ({ id, kind: "theme" });
-  const clear = (id) => ({ id, kind: "transparent" });
   const styleText = () => document.getElementById("gcb-style")?.textContent ?? null;
   const songchangeCount = () => Spicetify.Player.eventListeners?.songchange?.length ?? 0;
   const computedHex = (el, prop) => (el ? toHex(getComputedStyle(el)[prop]) : null);
@@ -1705,10 +1649,15 @@
   const HASH_LIKE = /(?<![\w-])[\w-]{16,20}(?![\w-])/g;
   const hashLike = (selector) => (selector.match(HASH_LIKE) ?? []).filter((t) => /[a-z]/.test(t) && /[A-Z]/.test(t));
 
+  // Anything translucent in the bar's CSS: colours are opaque only.
+  const OPACITY_RE = /rgba\(|\btransparent\b|#[0-9a-f]{8}\b/gi;
+  const opacityIn = (css) => css.match(OPACITY_RE) ?? [];
+
   // Everything our bar stylesheet must never do (CLAUDE.md → Hard rules).
   function cssProblems(css) {
     const problems = [];
     if (/!important/i.test(css)) problems.push("!important");
+    for (const found of opacityIn(css)) problems.push(`translucent colour ${found}`);
     for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
       const sel = selector.trim();
       if (sel !== SELECTOR) problems.push(`rule not on the Connect bar: ${sel}`);
@@ -1881,15 +1830,13 @@
       "2 stops": [image(true, [custom("s1", RED), custom("s2", BLUE)]), `linear-gradient(to right, ${RED}, ${BLUE})`],
       "8 stops": [image(true, eight.map((c, i) => custom(`s${i + 1}`, c))), `linear-gradient(to right, ${eight.join(", ")})`],
       "theme stops": [image(true, [theme("s1"), custom("s2", RED), theme("s3")]), `linear-gradient(to right, ${THEME_COLOUR}, ${RED}, ${THEME_COLOUR})`],
-      "transparent stops": [image(true, [clear("s1"), custom("s2", RED), clear("s3")]), `linear-gradient(to right, transparent, ${RED}, transparent)`],
       "gradient off, 3 stops → the first only": [image(false, [custom("s1", RED), custom("s2", GREEN), custom("s3", BLUE)]), `linear-gradient(to right, ${RED}, ${RED})`],
     };
     const wrongBuilds = Object.entries(builds).filter(([, [got, want]]) => got !== want);
-    check(3, "Gradient builder: 1, 2 and 8 stops, theme and transparent stops, gradient off", !wrongBuilds.length,
+    check(3, "Gradient builder: 1, 2 and 8 stops, theme stops, gradient off", !wrongBuilds.length,
       wrongBuilds.map(([label, [got, want]]) => `${label}: ${got} (expected ${want})`).join("; ") || `${Object.keys(builds).length} cases`);
-    const inertCases = { default: buildCss(defaultSettings()), "solid theme with more stops": css(false, [theme("s1"), custom("s2", RED)]),
-      "solid transparent": css(false, [clear("s1")]) };
-    check(3, "A solid theme colour or a solid transparent stop leaves the background alone (no rule without a text colour)",
+    const inertCases = { default: buildCss(defaultSettings()), "solid theme with more stops": css(false, [theme("s1"), custom("s2", RED)]) };
+    check(3, "A solid theme colour leaves the background alone (no rule without a text colour)",
       Object.values(inertCases).every((c) => c === ""), Object.entries(inertCases).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("; "));
     const themeCss = css(true, [theme("s1"), theme("s2")]);
     check(4, "Theme stop emits var(--spice-button …), never a resolved hex",
@@ -1902,7 +1849,7 @@
     // ── Injected CSS (#3) ──
     const samples = [
       [false, [custom("s1", RED)]],
-      [true, [theme("s1"), custom("s2", RED), clear("s3")], WHITE],
+      [true, [theme("s1"), custom("s2", RED), custom("s3", GREEN)], WHITE],
       [true, eight.map((c, i) => custom(`s${i + 1}`, c)), BLACK],
       [false, [theme("s1")], WHITE], // inert background, text colour only
     ];
@@ -1912,15 +1859,28 @@
     const parse = samples.flatMap(([gradient, stops, text]) => parseProblems(css(gradient, stops, text)));
     check(3, "CSS parses: every rule and declaration survives the browser's parser", !parse.length,
       parse.join("; ") || `${samples.length} samples parsed`);
+    // Opaque only: the generated CSS for every sample and every text colour mode, live included.
+    const opaqueCases = [...samples, [true, [theme("s1"), custom("s2", RED)]], [false, [custom("s1", BLUE)]]];
+    const translucent = [];
+    for (const [gradient, stops] of opaqueCases)
+      for (const mode of TEXT_MODES) {
+        setTestSettings(gradient, stops, mode);
+        for (const found of opacityIn(styleText() + css(gradient, stops, appliedTextColour()))) translucent.push(`${mode}: ${found}`);
+      }
+    check(4, "Generated CSS contains no rgba(, no transparent and no 8-digit hex (every sample, every text colour mode)",
+      !translucent.length, translucent.join("; ") || `${opaqueCases.length * TEXT_MODES.length} stylesheets`);
     const flagged = {
       "!important": cssProblems(`${SELECTOR} {\n  background-image: none !important;\n}\n`),
       "a hashed class": cssProblems(`${SELECTOR}${HASHED_SAMPLE} {\n  background-image: none;\n}\n`),
       "--background-base": cssProblems(`${SELECTOR} {\n  --background-base: red;\n}\n`),
       "a global rule": cssProblems(`:root {\n  background-image: none;\n}\n`),
       "a global --text-base": cssProblems(`:root {\n  --text-base: #ffffff;\n}\n`),
+      "transparent": cssProblems(`${SELECTOR} {\n  background-image: linear-gradient(to right, transparent, red);\n}\n`),
+      "rgba(": cssProblems(`${SELECTOR} {\n  background-image: linear-gradient(to right, rgba(0, 0, 0, .5), red);\n}\n`),
+      "an 8-digit hex": cssProblems(`${SELECTOR} {\n  background-image: linear-gradient(to right, #ff000080, red);\n}\n`),
     };
     const missed = Object.entries(flagged).filter(([, found]) => !found.length).map(([label]) => label);
-    check(3, "The CSS lint itself flags !important, a hashed class, --background-base and rules elsewhere (a global --text-base too)", !missed.length,
+    check(3, "The CSS lint itself flags !important, a hashed class, --background-base, rules elsewhere (a global --text-base too) and translucent colours", !missed.length,
       missed.length ? `not flagged: ${missed.join(", ")}` : Object.values(flagged).map((p) => p.join("/")).join("; "));
     const modalHashes = [...MODAL_CSS.matchAll(/([^{}]+)\{/g)].flatMap(([, sel]) => hashLike(sel));
     check(3, "Settings CSS: no hash-like class names, no !important, no --spice-rgb-button (Hazy leaves it stale)",
@@ -1939,7 +1899,7 @@
       const styleBefore = bar.getAttribute("style");
       const gradients = [
         [true, [custom("s1", RED), custom("s2", GREEN), custom("s3", BLUE)]],
-        [true, [theme("s1"), clear("s2"), custom("s3", RED)]],
+        [true, [theme("s1"), custom("s2", GREEN), custom("s3", RED)]],
         [false, [custom("s1", BLUE)]],
       ];
       const mismatches = [];
@@ -2017,12 +1977,12 @@
       pairs.map(([a, b]) => `${a}/${b} ${contrast(hexToRgb(a), hexToRgb(b)).toFixed(3)}`).join(", "));
     // Pure runs with a fixed theme and bar colour (Hazy's custom #8372fd), independent of the live theme.
     const hazy = { theme: hexToRgb("#8372fd"), base: hexToRgb("#8372fd") };
-    const stopsOf = (colours) => colours.map((c, i) => (c === "theme" ? theme(`s${i + 1}`) : c === "clear" ? clear(`s${i + 1}`) : custom(`s${i + 1}`, c)));
+    const stopsOf = (colours) => colours.map((c, i) => (c === "theme" ? theme(`s${i + 1}`) : custom(`s${i + 1}`, c)));
     const pickFor = (colours, region, ctx = hazy) =>
       pickTextColour(gradientSamples({ version: SCHEMA_VERSION, gradient: colours.length > 1, textColour: "auto", stops: stopsOf(colours) }, region, ctx));
     const whole = { from: 0, to: 1 };
     const right = { from: 0.8, to: 1 };
-    const fmt = (p) => `${COLOUR_NAMES[p.colour]} (black ${p.black.toFixed(2)}, white ${p.white.toFixed(2)})`;
+    const fmt = (p) => `${p.colour} (black ${p.black.toFixed(2)}, white ${p.white.toFixed(2)})`;
     const solidHazy = pickFor(["#8372fd"], whole);
     const inertHazy = pickFor(["theme"], whole);
     check(13, "#8372fd → black, ≈ 5.8:1 (as a colour and as Hazy's own bar colour behind a solid theme stop)",
@@ -2042,19 +2002,20 @@
       worstCase.colour === WHITE && byAverage === "black",
       `${fmt(worstCase)}; an average luminance (${meanLuminance.toFixed(3)}) would have picked ${byAverage}`);
     const counted = gradientSamples({ version: SCHEMA_VERSION, gradient: true, textColour: "auto", stops: stopsOf([RED, GREEN, BLUE, WHITE, BLACK]) }, { from: 0.2, to: 0.8 }, hazy);
-    const overWhite = gradientSamples({ version: SCHEMA_VERSION, gradient: true, textColour: "auto", stops: stopsOf([BLACK, "clear"]) }, { from: 0.5, to: 0.5 }, { ...hazy, base: [255, 255, 255] });
-    check(13, "Samples: both edges + every stop inside + 8 in between; transparency composited over the bar's colour (premultiplied)",
+    const atStops = counted.filter((sample) => [0.25, 0.5, 0.75].includes(sample.t)).map((sample) => rgbToHex(sample.rgb.map(Math.round)));
+    const midway = gradientSamples({ version: SCHEMA_VERSION, gradient: true, textColour: "auto", stops: stopsOf([BLACK, WHITE]) }, { from: 0.5, to: 0.5 }, hazy);
+    check(13, "Samples: both edges + every stop inside + 8 in between; at a stop the sample is the stop's own colour, between stops plain sRGB interpolation",
       counted.length === 2 + 3 + SAMPLES_BETWEEN && counted[0].t === 0.2 && counted[counted.length - 1].t === 0.8 &&
-        overWhite.every((sample) => sample.rgb.every((v) => about(v, 127.5, 0.01))),
-      `${counted.length} samples at ${counted.map((sample) => sample.t.toFixed(2)).join(", ")}; black→transparent over white at 50 %: ${overWhite[0].rgb.map((v) => v.toFixed(1)).join(", ")}`);
+        atStops.join() === [GREEN, BLUE, WHITE].join() && midway.every((sample) => sample.rgb.every((v) => about(v, 127.5, 0.01))),
+      `${counted.length} samples at ${counted.map((sample) => sample.t.toFixed(2)).join(", ")}; at the stops ${atStops.join(", ")}; black→white at 50 %: ${midway[0].rgb.map((v) => v.toFixed(1)).join(", ")}`);
     rootStyle.setProperty("--spice-button", PROBE, "important");
     const liveTheme = textContext().theme;
     restoreButton();
     check(13, "Theme stops are resolved from getComputedStyle(document.documentElement) at the time of the calculation",
       rgbToHex(liveTheme) === PROBE, `${rgbToHex(liveTheme)} with --spice-button ${PROBE}`);
     const hopeless = pickFor([BLACK, WHITE], whole);
-    check(16, "Neither black nor white reaches 4.5:1 → warning, and the better one is still picked",
-      hopeless.warning && hopeless.colour === BLACK && !pickFor(["#8372fd"], whole).warning, fmt(hopeless));
+    check(13, "Both contrasts low (black → white across the text) → still the better one (tie: black), and no warning",
+      hopeless.colour === BLACK && Object.keys(hopeless).join() === "colour,black,white", `${fmt(hopeless)}; keys ${Object.keys(hopeless).join()}`);
 
     // ── Text colour on the live bar (#12, #14) ──
     const textChecks = [
@@ -2144,9 +2105,9 @@
 
     // ── status() (#17) ──
     const st = window.__gcb.status().textColour;
-    const statusKeys = ["mode", "colour", "contrast", "region", "barPresent", "warning"];
-    check(17, "status() reports the text colour: mode, chosen colour, worst-case contrast, region fractions, bar present, warning",
-      !!st && statusKeys.every((key) => key in st) && st.mode === settings.textColour && st.colour === textResult.colour &&
+    const statusKeys = ["mode", "colour", "contrast", "region", "barPresent"];
+    check(17, "status() reports the text colour as plain values: mode, chosen colour, worst-case contrast, region fractions, bar present; no warning",
+      !!st && statusKeys.every((key) => key in st) && !("warning" in st) && st.mode === settings.textColour && st.colour === textResult.colour &&
         typeof st.contrast === "number" && typeof st.region?.from === "number" && st.barPresent === !!bar,
       JSON.stringify(st));
 
@@ -2314,12 +2275,12 @@
       settings.stops.length === 2 && settings.gradient && settings.stops[1].kind === settings.stops[0].kind && selectionIs(settings.stops[1].id),
       JSON.stringify(settings.stops));
 
-    setTestSettings(true, [clear("s1"), custom("s2", RED)]);
+    setTestSettings(true, [theme("s1"), custom("s2", RED)]);
     rightClick(dots()[0]);
     m.duplicateItem.click();
     await sleep(20);
-    check(4, "Duplicating a transparent stop inserts a transparent stop directly after it",
-      settings.stops.map((s) => `${s.id}:${s.kind}`).join() === "s1:transparent,s3:transparent,s2:custom",
+    check(4, "Duplicating a theme stop inserts a theme stop directly after it",
+      settings.stops.map((s) => `${s.id}:${s.kind}`).join() === "s1:theme,s3:theme,s2:custom",
       settings.stops.map((s) => `${s.id}:${s.kind}`).join());
     dots()[0].focus();
     press(dots()[0], "F10", { shiftKey: true });
@@ -2350,7 +2311,7 @@
       settings.stops.map((s) => s.id).join() === "s1,s3" && selectionIs("s3") && document.activeElement === m.minusButton, selection());
     stillOpen("−");
 
-    // ── Colour picker, theme and transparent stops (#4, #5) ──
+    // ── Colour picker and theme stops (#4, #5) ──
     const frame = () => new Promise((r) => (requestAnimationFrame(() => r()), setTimeout(r, 100)));
     const pointer = (el, type, fx, fy) => {
       const r = el.getBoundingClientRect();
@@ -2360,7 +2321,7 @@
         clientX: r.left + r.width * fx, clientY: r.top + r.height * fy,
       }));
     };
-    setTestSettings(true, [theme("s1"), custom("s2", RED), clear("s3")]);
+    setTestSettings(true, [theme("s1"), custom("s2", RED), custom("s3", BLUE)]);
     const themeDot = dots()[0];
     const rowBefore = dots();
     const inPlace = (hex) =>
@@ -2369,16 +2330,20 @@
     const state = () => `${JSON.stringify(settings.stops[0])}, dot ${computedHex(themeDot, "backgroundColor")}, selected ${selectedId}`;
     selectStop("s2");
     click(themeDot);
-    check(5, "Clicking the theme dot shows it in the picker; 'Following theme colour' disabled, 'Make transparent' enabled",
-      selectionIs("s1") && m.useThemeButton.disabled && m.useThemeButton.textContent === THEME_LABELS.on &&
-        !m.transparentButton.disabled && m.transparentButton.textContent === TRANSPARENT_LABELS.off, selection());
+    check(5, "Clicking the theme dot shows it in the picker; 'Following theme colour' disabled",
+      selectionIs("s1") && m.useThemeButton.disabled && m.useThemeButton.textContent === THEME_LABELS.on, selection());
+    const opacityControls = [...m.root.querySelectorAll("button, input")].filter((el) =>
+      /transparen|opacity|alpha/i.test(`${el.className} ${el.textContent} ${el.title} ${el.getAttribute("aria-label") ?? ""}`));
+    check(4, "No 'Make transparent' control (or any other transparency or opacity control) in the settings",
+      !opacityControls.length && !m.root.querySelector(".gcb-use-transparent") && m.picker.querySelectorAll(".gcb-controls > .gcb-button").length === 1,
+      opacityControls.map((el) => `${el.tagName.toLowerCase()}.${el.className} "${el.textContent}"`).join(", ") || "none");
     const sr = m.sv.getBoundingClientRect();
     const cr = m.picker.querySelector(".gcb-controls").getBoundingClientRect();
     check(5, `Picker columns side by side (needs ≥ ${PICKER_COLUMNS_MIN} px of content)`, cr.left >= sr.right && Math.abs(cr.top - sr.top) < 1,
       `content ${Math.round(m.picker.getBoundingClientRect().width)} px`);
     const pickerControls = {
       "SV square": m.sv, "hue slider": m.hue, R: m.rgb[0], G: m.rgb[1], B: m.rgb[2], "hex field": m.hex, "hex copy button": m.hexCopy,
-      "theme button": m.useThemeButton, "transparent button": m.transparentButton, ...(m.eyedropper ? { eyedropper: m.eyedropper } : {}),
+      "theme button": m.useThemeButton, ...(m.eyedropper ? { eyedropper: m.eyedropper } : {}),
     };
     const unreachable = Object.entries(pickerControls).filter(([, el]) => !reachable(el)).map(([name]) => name);
     check(5, "Every picker control is reachable (scrolled into view, its centre hit-tests to it)", !unreachable.length,
@@ -2422,21 +2387,14 @@
     m.hex.dispatchEvent(new Event("change", { bubbles: true }));
     stillOpen("editing the colour");
 
-    m.transparentButton.focus();
-    m.transparentButton.click();
-    await sleep(20);
-    stillOpen("'Make transparent'");
-    const transparentCss = styleText();
-    check(4, "'Make transparent' → a transparent stop: checkerboard dot, button disabled ('Transparent'), CSS has 'transparent', focus on the hex field",
-      settings.stops[0].kind === "transparent" && !("color" in settings.stops[0]) && dots()[0] === themeDot &&
-        getComputedStyle(themeDot).backgroundImage.includes("conic-gradient") && m.transparentButton.disabled &&
-        m.transparentButton.textContent === TRANSPARENT_LABELS.on && /linear-gradient\(to right, transparent,/.test(transparentCss) &&
-        document.activeElement === m.hex && m.hex.value === barBase(),
-      `${JSON.stringify(settings.stops[0])}, dot ${getComputedStyle(themeDot).backgroundImage.slice(0, 40)}…, hex ${m.hex.value} (bar ${barBase()})`);
+    check(5, "Custom stop → 'Use theme colour' enabled", !m.useThemeButton.disabled && m.useThemeButton.textContent === THEME_LABELS.off,
+      m.useThemeButton.textContent);
+    m.useThemeButton.focus();
     m.useThemeButton.click();
     await sleep(20);
-    check(4, "'Use theme colour' → a theme stop again; CSS has var(--spice-button …)",
-      settings.stops[0].kind === "theme" && m.useThemeButton.disabled && !m.transparentButton.disabled && styleText().includes(THEME_COLOUR),
+    check(4, "'Use theme colour' → a theme stop, dot updated in place, button disabled, focus on the hex field; CSS has var(--spice-button …)",
+      settings.stops[0].kind === "theme" && !("color" in settings.stops[0]) && dots()[0] === themeDot && m.useThemeButton.disabled &&
+        m.useThemeButton.textContent === THEME_LABELS.on && document.activeElement === m.hex && styleText().includes(THEME_COLOUR),
       JSON.stringify(settings.stops[0]));
     stillOpen("'Use theme colour'");
 
@@ -2446,7 +2404,7 @@
       let copied = null;
       try {
         clipboardSources.api = () => ({ copy: async (text) => (copied = text) });
-        setTestSettings(true, [custom("s1", RED), custom("s2", GREEN), clear("s3")]);
+        setTestSettings(true, [custom("s1", RED), custom("s2", GREEN), theme("s3")]);
         selectStop("s2");
         m.hexCopy.click();
         await sleep(20);
@@ -2454,8 +2412,8 @@
         selectStop("s3");
         m.hexCopy.click();
         await sleep(20);
-        check(5, "Hex copy button copies the selected #rrggbb (a transparent stop's: the bar's colour) and announces it",
-          first === GREEN && copied === barBase() && m.announce.textContent === "Hex code copied", `copied ${first}, then ${copied}`);
+        check(5, "Hex copy button copies the selected #rrggbb (a theme stop's: the resolved theme colour) and announces it",
+          first === GREEN && copied === themeHex() && m.announce.textContent === "Hex code copied", `copied ${first}, then ${copied}`);
       } finally {
         Object.assign(clipboardSources, realSources);
       }
@@ -2528,15 +2486,14 @@
       `${JSON.stringify(settings)}; ${styleText().replace(/\s+/g, " ")}`);
     stillOpen("Reset");
 
-    // ── Text colour row (#11, #16) ──
+    // ── Text colour row (#11) ──
     const textRowNodes = [...m.textButtons];
     const textState = () =>
       `mode ${settings.textColour}, checked ${m.textButtons.filter((b) => b.getAttribute("aria-checked") === "true").map((b) => b.dataset.mode).join() || "none"}, ` +
-      `tabindex ${m.textButtons.map((b) => b.tabIndex).join()}, focus ${document.activeElement?.dataset?.mode ?? document.activeElement?.className}, hint "${m.textHint.textContent}"`;
+      `tabindex ${m.textButtons.map((b) => b.tabIndex).join()}, focus ${document.activeElement?.dataset?.mode ?? document.activeElement?.className}`;
     const textShows = (mode) =>
       settings.textColour === mode && m.textButtons.every((b, i) => b === textRowNodes[i] && b.isConnected &&
-        (b.getAttribute("aria-checked") === "true") === (b.dataset.mode === mode) && b.tabIndex === (b.dataset.mode === mode ? 0 : -1)) &&
-      m.textHint.textContent === textHint().text;
+        (b.getAttribute("aria-checked") === "true") === (b.dataset.mode === mode) && b.tabIndex === (b.dataset.mode === mode ? 0 : -1));
     check(11, "Text colour row between the Gradient row and the preview: a radiogroup of Auto, Black, White, Spotify default; no <select>",
       m.gradientRow.nextElementSibling === m.text && m.text.nextElementSibling === m.preview && m.textModes.getAttribute("role") === "radiogroup" &&
         m.textModes.getAttribute("aria-labelledby") === "gcb-text-label" &&
@@ -2544,13 +2501,43 @@
         m.textButtons.every((b) => b.tagName === "BUTTON" && b.getAttribute("role") === "radio") && !m.root.querySelector("select") &&
         m.textButtons.every((b) => reachable(b)),
       textState());
+
+    // No hint and no warning in any mode, even where neither black nor white reads well (black →
+    // white across the whole bar), nothing logged, and the row sits right above the preview.
+    setTestSettings(true, [custom("s1", BLACK), custom("s2", WHITE)]);
+    const hintProblems = [];
+    const ourWarnings = [];
+    const warn = console.warn;
+    console.warn = (...args) => (String(args[0]).startsWith("[gcb]") ? ourWarnings.push(args.join(" ")) : warn(...args));
+    try {
+      for (const [i, mode] of TEXT_MODES.entries()) {
+        realClick(m.textButtons[i]);
+        recalcTextColour({ region: { from: 0, to: 1 } });
+        window.__gcb.status();
+        const extra = [...m.text.children].filter((el) => el !== m.textLabel && el !== m.textModes);
+        const hintLike = m.root.querySelector('.gcb-text-hint, .gcb-warning, [id$="-hint"], [aria-describedby]');
+        const words = /\d(\.\d)?:1\b|4\.5|contrast|readab|warning/i.exec(m.text.textContent + (m.text.nextElementSibling === m.preview ? "" : m.text.nextElementSibling?.textContent ?? ""));
+        const gap = m.preview.getBoundingClientRect().top - m.text.getBoundingClientRect().bottom;
+        const rowGap = parseFloat(getComputedStyle(m.root).rowGap);
+        if (!textShows(mode) || extra.length || hintLike || words || Math.abs(gap - rowGap) > 0.5)
+          hintProblems.push(`${mode}: ${extra.length} extra element(s), ${hintLike ? `.${hintLike.className}` : "no hint element"}, ` +
+            `${words ? `"${words[0]}"` : "no contrast text"}, gap ${gap.toFixed(1)} px (modal gap ${rowGap} px)`);
+      }
+    } finally {
+      console.warn = warn;
+    }
+    recalcTextColour();
+    check(11, "No hint or warning under the Text colour row in any of the four modes, nothing logged; the row sits the modal's normal gap above the preview",
+      !hintProblems.length && !ourWarnings.length,
+      [...hintProblems, ...ourWarnings].join("; ") || `${TEXT_MODES.join(", ")}: no hint, ${m.text.children.length} children (label, radiogroup)`);
+
     setTestSettings(true, [custom("s1", RED), custom("s2", BLUE)]);
     realClick(m.textButtons[2]);
     const whiteCss = styleText();
     const previewWhite = toHex(getComputedStyle(m.previewLabel).color);
     check(11, "Clicking White applies it live: --text-base and --essential-base #ffffff in the bar's rule, the preview label white, the row updated in place",
       textShows("white") && whiteCss.includes("--text-base: #ffffff;") && whiteCss.includes("--essential-base: #ffffff;") &&
-        previewWhite === WHITE && toHex(getComputedStyle(m.previewIcon).fill) === WHITE && m.textHint.textContent.startsWith("White"),
+        previewWhite === WHITE && toHex(getComputedStyle(m.previewIcon).fill) === WHITE,
       `${textState()}; preview ${previewWhite}`);
     realClick(m.textButtons[3]);
     check(11, "Spotify default writes no text colour; the preview shows Spotify's own",
@@ -2574,15 +2561,6 @@
     check(11, "The chosen text colour is saved", storedText === "black", `stored ${storedText}`);
     realClick(m.textButtons[0]);
 
-    setTestSettings(true, [custom("s1", BLACK), custom("s2", WHITE)]);
-    recalcTextColour({ region: { from: 0, to: 1 } });
-    const warned = window.__gcb.status().textColour;
-    const errorColour = computedRgb(m.root, "var(--spice-notification-error, #e91429)");
-    check(16, "Neither reaching 4.5:1 → the settings show the warning in the error colour, and status() has it",
-      m.textHint.classList.contains("gcb-warning") && /4\.5:1/.test(m.textHint.textContent) && !!warned.warning &&
-        toHex(getComputedStyle(m.textHint).color) === rgbToHex(errorColour.slice(0, 3).map(Math.round)),
-      `hint "${m.textHint.textContent}"; status warning ${JSON.stringify(warned.warning)}`);
-    recalcTextColour();
     // The checked button is filled with the live --spice-button; its label takes whichever of
     // --spice-text and --spice-main contrasts more (GPB #43). A dark and a light probe.
     const fillProblems = [];
@@ -2595,7 +2573,7 @@
       const label = parseRgb(getComputedStyle(checked).color);
       const want = hexToRgb(probe);
       const ratio = label ? contrast(label, want) : 0;
-      if (!fill || !fill.slice(0, 3).every((v, i) => Math.abs(v - want[i]) <= 1) || fill[3] !== 1 || ratio < MIN_CONTRAST)
+      if (!fill || !fill.every((v, i) => Math.abs(v - want[i]) <= 1) || ratio < 4.5) // parseRgb() only takes opaque colours
         fillProblems.push(`${probe}: fill ${getComputedStyle(checked).backgroundColor}, label ${getComputedStyle(checked).color} (${ratio.toFixed(2)}:1)`);
     }
     restoreButton();
@@ -2604,7 +2582,7 @@
       !fillProblems.length, fillProblems.join("; ") || "both probes fine");
 
     // ── Preview strip (#7) ──
-    setTestSettings(true, [theme("s1"), clear("s2"), custom("s3", RED)]);
+    setTestSettings(true, [theme("s1"), custom("s2", GREEN), custom("s3", RED)]);
     await sleep(50);
     const pv = m.preview;
     const pr = pv.getBoundingClientRect();
@@ -2663,7 +2641,7 @@
     check(2, "Storage key is our own (gcb:…), never Gradient Progress Bar's", STORAGE_KEY !== GPB_STORAGE_KEY && STORAGE_KEY.startsWith("gcb:"),
       `${STORAGE_KEY} vs GPB's ${GPB_STORAGE_KEY}`);
     check(2, "Defaults: one theme stop, gradient off, text colour Auto",
-      JSON.stringify(defaultSettings()) === JSON.stringify({ version: 1, gradient: false, textColour: "auto", stops: [{ id: "s1", kind: "theme" }] }),
+      JSON.stringify(defaultSettings()) === JSON.stringify({ version: 2, gradient: false, textColour: "auto", stops: [{ id: "s1", kind: "theme" }] }),
       JSON.stringify(defaultSettings()));
     const invalid = {
       "corrupt JSON": "{broken",
@@ -2675,6 +2653,8 @@
       "duplicate ids": JSON.stringify({ version: 1, gradient: true, stops: [theme("s1"), theme("s1")] }),
       "unknown text colour": JSON.stringify({ version: 1, gradient: false, textColour: "grey", stops: [theme("s1")] }),
       "old version without a migration": JSON.stringify({ version: 0, gradient: false, stops: [theme("s1")] }),
+      "a transparent stop in version 2": JSON.stringify({ version: 2, gradient: true, stops: [theme("s1"), { id: "s2", kind: "transparent" }] }),
+      "an 8-digit hex in version 2": JSON.stringify({ version: 2, gradient: false, stops: [custom("s1", "#ff000080")] }),
     };
     const wrongLoads = Object.entries(invalid).map(([label, raw]) => [label, loadQuietly(raw)])
       .filter(([, { loaded, ours }]) => JSON.stringify(loaded) !== JSON.stringify(defaultSettings()) || ours !== 1);
@@ -2700,11 +2680,25 @@
     check(11, "Settings saved before the text colour option (no textColour) → Auto, no warning",
       beforeText.loaded.textColour === "auto" && beforeText.loaded.gradient && beforeText.loaded.stops.length === 2 && beforeText.ours === 0,
       `${JSON.stringify(beforeText.loaded)}, ${beforeText.ours} warning(s)`);
-    setTestSettings(true, [theme("s1"), custom("s2", RED), clear("s4")], "white");
+    // Version 1 → 2: transparency removed. A fully transparent stop (kind or alpha 00) goes, a half
+    // transparent one keeps its RGB; nothing left → the defaults. No warning either way.
+    const v1 = (stops, gradient = true) => JSON.stringify({ version: 1, gradient, textColour: "white", stops });
+    const mixed = loadQuietly(v1([{ id: "s1", kind: "transparent" }, custom("s2", "#ff000080"), custom("s3", BLUE)]));
+    const alphaZero = loadQuietly(v1([custom("s1", "#00ff0000"), theme("s2"), custom("s3", "#123456ff")]));
+    const allClear = loadQuietly(v1([{ id: "s1", kind: "transparent" }, { id: "s2", kind: "transparent" }, custom("s3", "#ffffff00")]));
+    const loaded = (r) => `${JSON.stringify(r.loaded)} (${r.ours} warning(s))`;
+    check(2, "Migration 1 → 2: one transparent, one half-transparent and one opaque stop → two opaque stops (the half-transparent one keeps its RGB)",
+      mixed.loaded.version === 2 && mixed.loaded.stops.map((stop) => stop.color).join() === `${RED},${BLUE}` && mixed.loaded.gradient &&
+        mixed.loaded.textColour === "white" && !mixed.ours &&
+        alphaZero.loaded.stops.map((stop) => `${stop.kind}${stop.color ? ` ${stop.color}` : ""}`).join() === "theme,custom #123456" && !alphaZero.ours,
+      `${loaded(mixed)}; alpha 00 / opaque 8-digit: ${loaded(alphaZero)}`);
+    check(2, "Migration 1 → 2: only transparent stops → the defaults",
+      JSON.stringify(allClear.loaded) === JSON.stringify(defaultSettings()) && !allClear.ours, loaded(allClear));
+    setTestSettings(true, [theme("s1"), custom("s2", RED), custom("s4", BLUE)], "white");
     const writtenAtOnce = Spicetify.LocalStorage.get(STORAGE_KEY) === JSON.stringify(settings);
     await sleep(SAVE_DELAY + 100);
     const reloaded = loadSettings();
-    check(2, "Saves are debounced, then a load returns identical settings (round-trip, all three kinds, the text colour)",
+    check(2, "Saves are debounced, then a load returns identical settings (round-trip, theme and custom stops, the text colour)",
       !writtenAtOnce && JSON.stringify(reloaded) === JSON.stringify(settings), `written at once ${writtenAtOnce}, ${JSON.stringify(reloaded)}`);
   }
 
@@ -2750,12 +2744,11 @@
       dom: domProbe(),
     };
     console.log(`[gcb] ${report.phase}${report.entry ? `, entry: ${report.entry}` : ""}`);
-    if (report.textColour?.warning) console.warn(`[gcb] ${report.textColour.warning}`);
     return report;
   }
 
-  // The text colour in status() (#17): mode, the chosen colour, its worst-case contrast, the text
-  // region as fractions of the bar's width, whether the bar is there, and the warning, if any.
+  // The text colour in status() (#17), for debugging: mode, the chosen colour, its worst-case
+  // contrast, the text region as fractions of the bar's width, and whether the bar is there.
   function textStatus() {
     const r = textResult;
     const round = (n) => (typeof n === "number" ? Math.round(n * 1000) / 1000 : null);
@@ -2768,7 +2761,6 @@
       white: round(r?.white),
       region: r?.region ? { from: round(r.region.from), to: round(r.region.to), measured: r.measured } : null,
       barPresent: !!document.querySelector(SELECTOR),
-      warning: r?.warning ? textHint(r, mode).text : null,
     };
   }
 
