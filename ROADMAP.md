@@ -56,7 +56,7 @@ Agreed ideas, not scheduled. Tracking: [#33](https://github.com/VoidCrowned/spic
 | [#23](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/23) | "Mirror song progress" mode | the bar shows the playback position |
 | [#24](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/24) | Pull the code shared with GPB into a common module | settings, picker, stop editor, self-test helpers |
 | [#25](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/25) | Hover effect | |
-| [#26](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/26) | Per-colour opacity | beyond the fully transparent stop |
-| [#27](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/27) | Gradient angle | |
+| [#26](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/26) | ~~Per-colour opacity~~ dropped — not planned in GPB ([VoidCrowned/spicetify-gradient-progress-bar#17](https://github.com/VoidCrowned/spicetify-gradient-progress-bar/issues/17)) | |
+| [#27](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/27) | ~~Gradient angle~~ dropped — not planned in GPB ([VoidCrowned/spicetify-gradient-progress-bar#16](https://github.com/VoidCrowned/spicetify-gradient-progress-bar/issues/16)) | |
 | [#28](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/28) | Custom stop positions | schema change |
 | [#29](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/29) | Presets | as in GPB |

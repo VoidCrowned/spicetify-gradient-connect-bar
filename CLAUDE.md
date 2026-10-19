@@ -56,6 +56,7 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 - UI strings and docs in **British English** ("colour").
 - Top-of-file comment block: name, version, author, repo link, and a short *Compatibility rules* section restating the hard rules below.
 - Code ported from GPB keeps its comments; references to GPB issues are written `GPB #48`, plain `#n` means this repo.
+- **Never plan or implement a feature that GPB closed as not planned** (Void's rule). Before adding a roadmap item or issue, check `gh issue list -R VoidCrowned/spicetify-gradient-progress-bar --state closed --search "reason:not-planned"`. A matching GCB item is struck through in `ROADMAP.md` (`~~…~~ dropped — not planned in GPB (VoidCrowned/spicetify-gradient-progress-bar#N)`) and its issue closed as not planned with a pointer to the GPB issue.
 
 ## Verified facts — Spotify DOM
 
