@@ -44,7 +44,7 @@ The features GCB shares with Gradient Progress Bar. Tracking: [#37](https://gith
 | [#29](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/29) | Presets (built-in + your own); built-ins keep the text colour, own presets save it | ui, enhancement | ✅ |
 | [#36](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/36) | Share codes: Export / Import, also GPB's `gpb1:` codes | ui, compatibility | ✅ |
 
-## Milestone 4 — Release 1.0.0
+## Milestone 4 — Release 1.0.0 — done 2026-10-19
 
 Tracking: [#32](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/32).
 
@@ -54,9 +54,9 @@ Tracking: [#32](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/is
 | [#19](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/19) | README screenshots — the settings window only; the preview strip shows the bar (Void) | documentation | ✅ |
 | [#20](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/20) | Add the repo topic `spicetify-extensions` | packaging | ✅ |
 | [#21](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/21) | Tag and release v1.0.0 | packaging | ✅ |
-| [#22](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/22) | Marketplace check | packaging, testing | ⬜ |
+| [#22](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/22) | Marketplace check | packaging, testing | ✅ |
 
-Milestones 1–3 were tested together: Void's self-test 170/170 on Spotify 1.3.5.3058 (v0.4.1), every visual checklist ticked. Builds are handed over as `Test build <sha>` comments on the open milestone's tracking issue. See `CLAUDE.md → Working mode`; test procedure: [TESTING.md](TESTING.md).
+Milestones 1–3 were tested together: Void's self-test 170/170 on Spotify 1.3.5.3058 (v0.4.1), every visual checklist ticked. v1.0.0 was then installed from the Marketplace with no local copy: every self-test check passed and both Marketplace checklist items were ticked. Builds are handed over as `Test build <sha>` comments on the open milestone's tracking issue. See `CLAUDE.md → Working mode`; test procedure: [TESTING.md](TESTING.md).
 
 ## Future
 
