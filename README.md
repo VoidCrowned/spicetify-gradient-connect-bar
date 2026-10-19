@@ -2,9 +2,9 @@
 
 A [Spicetify](https://spicetify.app) extension that recolours Spotify's **Connect bar** — the "Playing on …" strip below the player while audio plays on another device — with one colour, or several blended into a gradient.
 
-> **Status:** in development (v0.4.0), not released yet. See the [roadmap](ROADMAP.md).
+> **Status:** released — **v1.0.0**. See the [changelog](CHANGELOG.md) and the [roadmap](ROADMAP.md).
 
-![Gradient Connect Bar: a gradient Connect bar](preview.png)
+![Gradient Connect Bar: the settings window, with the preview strip showing a gradient Connect bar](preview.png)
 
 ## Features
 
@@ -19,9 +19,11 @@ A [Spicetify](https://spicetify.app) extension that recolours Spotify's **Connec
 
 ## Installation
 
-**Manual** (until the first release is on the Marketplace):
+**Spicetify Marketplace:** search for **Gradient Connect Bar** and click *Install*.
 
-1. Download `gradientConnectBar.js` from this repository.
+**Manual:**
+
+1. Download `gradientConnectBar.js` from the [latest release](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/releases/latest).
 2. Copy it into the `Extensions` folder inside your Spicetify config folder (`spicetify config-dir` shows where), then enable it:
    ```sh
    spicetify config extensions gradientConnectBar.js
@@ -76,7 +78,7 @@ Designed to sit on top of any theme without fighting it: it uses no `!important`
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md).
+See [ROADMAP.md](ROADMAP.md) and the [changelog](CHANGELOG.md).
 
 ## Contributing
 

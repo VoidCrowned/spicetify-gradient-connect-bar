@@ -50,8 +50,8 @@ Tracking: [#32](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/is
 
 | # | Issue | Area | Status |
 |---|---|---|---|
-| [#18](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/18) | Real `preview.png` (Void provides the screenshot) | packaging | ⬜ |
-| [#19](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/19) | README screenshots | documentation | ⬜ |
+| [#18](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/18) | Real `preview.png` (Void provides the screenshot) | packaging | ✅ |
+| [#19](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/19) | README screenshots — the settings window only; the preview strip shows the bar (Void) | documentation | ✅ |
 | [#20](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/20) | Add the repo topic `spicetify-extensions` | packaging | ⬜ |
 | [#21](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/21) | Tag and release v1.0.0 | packaging | ⬜ |
 | [#22](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/22) | Marketplace check | packaging, testing | ⬜ |
