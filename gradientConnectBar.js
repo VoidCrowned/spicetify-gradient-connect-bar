@@ -1,5 +1,5 @@
 // NAME: Gradient Connect Bar
-// VERSION: 0.3.0
+// VERSION: 0.4.0
 // AUTHOR: VoidCrowned
 // REPO: https://github.com/VoidCrowned/spicetify-gradient-connect-bar
 // DESCRIPTION: Recolours Spotify's Connect bar ("Playing on …") with a solid colour or a multi-stop gradient.
@@ -16,7 +16,7 @@
 (async function gcb() {
   "use strict";
 
-  const VERSION = "0.3.0";
+  const VERSION = "0.4.0";
   // Where this copy was loaded from: the Marketplace (jsDelivr) or the CLI (Extensions folder).
   // currentScript is only set before the first await, so capture it here.
   const SOURCE = document.currentScript?.src || null;
@@ -36,10 +36,14 @@
   // window.__gcb exists from the first line, so a stuck or failed start-up is visible in devtools
   // (`__gcb.status()`) instead of failing silently.
 
-  const startup = { phase: "waiting for Spicetify", waitingFor: [], entry: null, error: null, since: Date.now() };
+  const startup = { phase: "waiting for Spicetify", waitingFor: [], entry: null, entryErrors: [], error: null, since: Date.now() };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const api = (name) => window.Spicetify?.[name];
   const notReady = (what) => () => console.warn(`[gcb] Not ready (${startup.phase}) — ${what} needs a started extension.`);
+  // Entry-point state (#34, #35). Up here because status() can run while start-up still waits.
+  let menuRegistered = false;
+  let shared = null; // our handle on the shared top-bar entry: joinGradientBars()
+  const menuItemVerdicts = new WeakMap(); // MenuItem component → usable?
 
   window.__gcb = {
     version: VERSION,
@@ -171,6 +175,200 @@
     Spicetify.LocalStorage.set(STORAGE_KEY, JSON.stringify(settings));
   }
 
+  // ── Presets and share codes (#29, #36) ──────────────────────────────────────
+  // Ported from GPB (GPB #21, #51, #53), without Spread and with the text colour. Own presets
+  // live in their own key with their own version, so gcb:settings never changes; GPB's
+  // gpb:presets is never read. Every stored preset and every imported code goes through
+  // validateSettings().
+
+  const PRESETS_KEY = "gcb:presets";
+  const PRESETS_VERSION = 1;
+  const MAX_PRESETS = 12;
+  const PRESET_NAME_MAX = 24;
+  const CODE_PREFIX = "gcb1:"; // the code's format version; a future schema bumps it
+  const GPB_CODE_PREFIX = "gpb1:"; // Gradient Progress Bar's codes import too (#36)
+  const TEXT_CODES = { auto: "a", black: "b", white: "w", default: "d" };
+  const GPB_MODE_CODES = ["c", "a", "s"]; // GPB's Spread modes: checked as GPB checks them, then dropped
+
+  // Colours only, all fixed, the same five as GPB (#53 there): applying one keeps the current
+  // text colour. They can't be renamed or deleted, and they have their own chip row.
+  const BUILT_IN_PRESETS = [
+    { id: "b:void", name: "Void", colours: ["#8372fd", "#5a82ff", "#8372fd"] },
+    { id: "b:sunset", name: "Sunset", colours: ["#6e33ff", "#ff5f6d", "#ffc371"] },
+    { id: "b:aurora", name: "Aurora", colours: ["#00f5a0", "#00d9f5", "#7f5af0"] },
+    { id: "b:neon", name: "Neon", colours: ["#ff00cc", "#3333ff", "#33f7ff"] },
+    { id: "b:fairy", name: "Fairy", colours: ["#ff59d1", "#ffb800", "#77bc00"] },
+  ].map((preset) => ({ ...preset, builtIn: true }));
+
+  let presets = []; // own presets: [{ id, name, settings: { gradient, textColour, stops } }]
+
+  // What a preset stores: the settings without the schema version.
+  function snapshot(s) {
+    return { gradient: s.gradient, textColour: s.textColour, stops: s.stops.map((stop) => ({ ...stop })) };
+  }
+
+  // The settings a preset applies. A built-in keeps the current text colour.
+  function presetSettings(preset, current = settings) {
+    if (!preset.builtIn) return { version: SCHEMA_VERSION, ...structuredClone(preset.settings) };
+    const stops = preset.colours.map((color, i) => ({ id: `s${i + 1}`, kind: "custom", color }));
+    return { version: SCHEMA_VERSION, gradient: true, textColour: current.textColour, stops };
+  }
+
+  // Equal settings, ignoring stop ids. Built-ins therefore compare colours only (their text
+  // colour is the current one).
+  function sameSettings(a, b) {
+    return a.gradient === b.gradient && a.textColour === b.textColour && a.stops.length === b.stops.length &&
+      a.stops.every((stop, i) => stop.kind === b.stops[i].kind && stop.color === b.stops[i].color);
+  }
+
+  const matchesPreset = (preset, s = settings) => sameSettings(s, presetSettings(preset, s));
+
+  const presetById = (id) => BUILT_IN_PRESETS.find((p) => p.id === id) ?? presets.find((p) => p.id === id) ?? null;
+
+  // A clean own preset, or null. Names are trimmed and 1–24 characters long.
+  function validatePreset(entry) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || !entry.id || typeof entry.name !== "string")
+      return null;
+    const name = entry.name.trim();
+    if (!name || name.length > PRESET_NAME_MAX) return null;
+    const valid = validateSettings({ ...entry.settings, version: SCHEMA_VERSION });
+    return valid && { id: entry.id, name, settings: snapshot(valid) };
+  }
+
+  // Invalid entries (and any beyond 12) are dropped with one warning; an unreadable key gives
+  // an empty list and one warning. Storage is only rewritten by the next change.
+  function loadPresets(raw = Spicetify.LocalStorage.get(PRESETS_KEY)) {
+    if (raw == null) return [];
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch {}
+    if (!data || data.version !== PRESETS_VERSION || !Array.isArray(data.presets)) {
+      console.warn("[gcb] Saved presets were unreadable and have been ignored.");
+      return [];
+    }
+    const list = [];
+    for (const entry of data.presets) {
+      const preset = validatePreset(entry);
+      if (!preset || list.length >= MAX_PRESETS || list.some((p) => p.id === preset.id)) continue;
+      preset.name = uniqueName(preset.name, list);
+      list.push(preset);
+    }
+    const dropped = data.presets.length - list.length;
+    if (dropped) console.warn(`[gcb] ${dropped} saved preset${dropped === 1 ? " was" : "s were"} invalid and dropped.`);
+    return list;
+  }
+
+  function savePresets() {
+    Spicetify.LocalStorage.set(PRESETS_KEY, JSON.stringify({ version: PRESETS_VERSION, presets }));
+  }
+
+  // Trimmed, at most 24 characters, and unique among the built-ins and `list` (case-insensitive,
+  // `exceptId` aside): a clash gets " (2)", " (3)" and so on.
+  function uniqueName(name, list = presets, exceptId = null) {
+    const base = name.trim().slice(0, PRESET_NAME_MAX);
+    const taken = new Set([...BUILT_IN_PRESETS, ...list].filter((p) => p.id !== exceptId).map((p) => p.name.toLowerCase()));
+    if (!taken.has(base.toLowerCase())) return base;
+    for (let n = 2; ; n++) {
+      const suffix = ` (${n})`;
+      const candidate = base.slice(0, PRESET_NAME_MAX - suffix.length).trimEnd() + suffix;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+  }
+
+  const defaultPresetName = () => uniqueName(`Preset ${presets.length + 1}`);
+
+  function nextPresetId() {
+    const ids = new Set(presets.map((p) => p.id));
+    let n = 1;
+    while (ids.has(`p${n}`)) n++;
+    return `p${n}`;
+  }
+
+  // Saves the current settings as a new own preset. Returns it, or null at the limit.
+  function addPreset(name) {
+    if (presets.length >= MAX_PRESETS) return null;
+    const preset = { id: nextPresetId(), name: uniqueName(name.trim() || defaultPresetName()), settings: snapshot(settings) };
+    presets.push(preset);
+    savePresets();
+    return preset;
+  }
+
+  function renamePreset(id, name) {
+    const preset = presets.find((p) => p.id === id);
+    if (!preset || !name.trim()) return false;
+    preset.name = uniqueName(name, presets, id);
+    savePresets();
+    return true;
+  }
+
+  function updatePreset(id) {
+    const preset = presets.find((p) => p.id === id);
+    if (!preset) return false;
+    preset.settings = snapshot(settings);
+    savePresets();
+    return true;
+  }
+
+  // Own presets only: a built-in id finds nothing. Returns { preset, index } for Undo, or null.
+  function deletePreset(id) {
+    const index = presets.findIndex((p) => p.id === id);
+    if (index === -1) return null;
+    const [preset] = presets.splice(index, 1);
+    savePresets();
+    return { preset, index };
+  }
+
+  function restorePreset({ preset, index }) {
+    presets.splice(Math.min(index, presets.length), 0, preset);
+    savePresets();
+  }
+
+  const toBase64Url = (data) => btoa(JSON.stringify(data)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  // gcb1: + base64url(JSON) of { g: 0|1, x: "a"|"b"|"w"|"d", s: ["t" | "rrggbb", …] }, t = theme,
+  // x = the text colour.
+  function encodeCode(s) {
+    return CODE_PREFIX + toBase64Url({
+      g: s.gradient ? 1 : 0,
+      x: TEXT_CODES[s.textColour],
+      s: s.stops.map((stop) => (stop.kind === "theme" ? "t" : stop.color.slice(1))),
+    });
+  }
+
+  // { settings, from: "gcb" | "gpb" } from a share code, checked by validateSettings(), or null.
+  // gpb1: is decoded exactly as GPB's decodeCode() does (its Spread mode must be valid), then the
+  // mode is dropped and `current`'s text colour kept. Surrounding whitespace is fine; an unknown
+  // prefix or version isn't.
+  function decodeCode(text, current = settings) {
+    const code = String(text ?? "").trim();
+    const prefix = [CODE_PREFIX, GPB_CODE_PREFIX].find((candidate) => code.startsWith(candidate));
+    const body = prefix ? code.slice(prefix.length) : "";
+    if (!prefix || !/^[A-Za-z0-9_-]+$/.test(body)) return null;
+    let data = null;
+    try {
+      data = JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/")));
+    } catch {
+      return null;
+    }
+    if (!data || typeof data !== "object" || !Array.isArray(data.s)) return null;
+    const fromGpb = prefix === GPB_CODE_PREFIX;
+    if (fromGpb && !GPB_MODE_CODES.includes(data.m)) return null;
+    // Anything unexpected is passed on as a value validateSettings() rejects.
+    const textColour = fromGpb ? current.textColour : Object.keys(TEXT_CODES).find((key) => TEXT_CODES[key] === data.x) ?? null;
+    const valid = validateSettings({
+      version: SCHEMA_VERSION,
+      gradient: data.g === 1 ? true : data.g === 0 ? false : null,
+      textColour,
+      stops: data.s.map((value, i) =>
+        value === "t"
+          ? { id: `s${i + 1}`, kind: "theme" }
+          : { id: `s${i + 1}`, kind: "custom", color: typeof value === "string" ? `#${value}` : null }
+      ),
+    });
+    return valid && { settings: valid, from: fromGpb ? "gpb" : "gcb" };
+  }
+
   // ── Rendering ───────────────────────────────────────────────────────────────
 
   function stopColour(stop) {
@@ -223,7 +421,12 @@
   // follows, debounced (#15).
   function update({ rerender = true } = {}) {
     applyCss();
-    if (modal) rerender ? renderModal() : renderPreview();
+    if (modal) {
+      rerender ? renderModal() : renderPreview();
+      renderPresetStates();
+    }
+    // An Undo for applied settings would throw away later edits, so any other change drops it.
+    if (pendingUndo?.after && pendingUndo.after !== JSON.stringify(settings)) clearUndo();
     scheduleTextColour();
     saveSettings();
   }
@@ -647,6 +850,44 @@
 .gcb-hex-copy:hover { color: var(--spice-text); }
 .gcb-hex-copy:focus-visible { outline: 2px solid var(--spice-text); outline-offset: -1px; }
 .gcb-colour-picker .gcb-button { align-self: stretch; padding: 6px 12px; font-size: .875rem; }
+.gcb-share-button { display: inline-flex; align-items: center; align-self: center; gap: 6px; padding: 4px 12px 4px 10px; font-size: .8125rem; }
+.gcb-share-button > svg { flex: none; }
+.gcb-share-text { display: inline-grid; justify-items: center; }
+.gcb-share-text > span { grid-area: 1 / 1; }
+.gcb-share-button[aria-expanded="true"] { border-color: var(--spice-text); }
+.gcb-presets > * { margin: 0; }
+.gcb-presets > * + * { margin-top: 8px; }
+.gcb-presets > .gcb-undo:not(.gcb-has-status) { margin-top: 0; }
+.gcb-presets-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gcb-text-button { display: inline-grid; padding: 2px 8px; border: 0; border-radius: 500px; background: none; color: var(--spice-subtext); font: inherit; font-size: .8125rem; font-weight: 700; cursor: pointer; }
+.gcb-text-button > span { grid-area: 1 / 1; }
+.gcb-text-button:hover:not(:disabled) { background-color: rgba(var(--spice-rgb-text), .1); color: var(--spice-text); }
+.gcb-text-button:focus-visible { outline: 2px solid var(--spice-text); outline-offset: 1px; }
+.gcb-sizer { visibility: hidden; }
+.gcb-chips { display: flex; flex-direction: column; gap: 8px; }
+.gcb-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gcb-chip { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; height: 28px; padding: 0 12px 0 7px; border: 1px solid rgba(var(--spice-rgb-text), .3); border-radius: 500px; background: none; color: var(--spice-text); font: inherit; font-size: .8125rem; cursor: pointer; }
+.gcb-chip:hover:not(:disabled) { border-color: var(--spice-text); }
+.gcb-chip[aria-pressed="true"], .gcb-chip[aria-pressed="true"]:hover:not(:disabled), .gcb-chip.gcb-armed, .gcb-chip.gcb-armed:hover:not(:disabled) { border-color: var(--spice-button); }
+.gcb-chip.gcb-armed { background-color: color-mix(in srgb, var(--spice-button) 20%, transparent); }
+.gcb-chip:disabled { opacity: .5; cursor: not-allowed; }
+.gcb-chip:focus-visible { outline: 2px solid var(--spice-text); outline-offset: 2px; }
+.gcb-save-chip { padding: 0 12px; color: var(--spice-subtext); }
+.gcb-save-chip:hover:not(:disabled) { color: var(--spice-text); }
+.gcb-chip-swatch { flex: none; width: 12px; height: 12px; border-radius: 50%; }
+.gcb-chip-text { display: inline-grid; justify-items: center; }
+.gcb-chip-text > span { grid-area: 1 / 1; white-space: nowrap; }
+.gcb-name-field { flex: none; width: 18ch; height: 28px; padding: 0 12px; border-radius: 500px; text-align: left; }
+.gcb-undo { font-size: .8125rem; color: var(--spice-subtext); }
+.gcb-presets-tools { display: flex; align-items: center; gap: 8px; }
+.gcb-code-hint { margin: 6px 0 0; font-size: .75rem; color: var(--spice-subtext); }
+.gcb-code-output, .gcb-code-input { font-family: ui-monospace, Consolas, monospace; font-size: .8125rem; text-align: left; }
+.gcb-import-row { display: flex; align-items: center; gap: 8px; }
+.gcb-import-row > .gcb-code-input { flex: 1; }
+.gcb-import-row > .gcb-button { flex: none; align-self: center; padding: 4px 14px; font-size: .875rem; }
+.gcb-import-error { margin: 0; font-size: .75rem; color: var(--spice-notification-error, #e91429); }
+.gcb-import-error:not(:empty) { margin-top: 6px; }
+.gcb-undo-button { padding: 2px 4px; color: var(--spice-text); text-decoration: underline; }
 `;
   // Two columns from 420 px of content (202 + 16 + 202), stacked below that. Flex-wrap rather
   // than a container query: inline-size containment could collapse a shrink-to-fit modal.
@@ -680,6 +921,11 @@
   // Both icons are in the markup and swapped with `hidden`, so no node is replaced.
   const withClass = (svg, className, hidden = false) => svg.replace("<svg ", `<svg class="${className}"${hidden ? " hidden" : ""} `);
 
+  const EXPORT_ICON = // arrow up out of a tray (GPB #52)
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 1.5 4.5 5h2.75v5.5h1.5V5h2.75z"/><path d="M1 9.5h1.5v4h11v-4H15V15H1z"/></svg>';
+  const IMPORT_ICON = // arrow down into a tray (GPB #52)
+    '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7.25 1.5h1.5V7h2.75L8 10.5 4.5 7h2.75z"/><path d="M1 9.5h1.5v4h11v-4H15V15H1z"/></svg>';
+
   const EYEDROPPER_ICON =
     '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M13.35 2.65a2 2 0 0 0-2.83 0L8.9 4.27l-.7-.71-1.06 1.06.7.71-5.3 5.3a1.5 1.5 0 0 0-.44 1.07L2 14l2.3-.1a1.5 1.5 0 0 0 1.07-.44l5.3-5.3.71.7 1.06-1.06-.7-.71 1.61-1.61a2 2 0 0 0 0-2.83zM4.3 12.4l-.8.04.04-.8 5.37-5.37.76.76z"/></svg>';
 
@@ -700,6 +946,9 @@
       <div class="gcb-popover gcb-menu" role="menu" aria-label="Colour actions" hidden>
         <button type="button" role="menuitem" class="gcb-menu-item gcb-duplicate">Duplicate</button>
         <button type="button" role="menuitem" class="gcb-menu-item gcb-remove">Remove</button>
+        <button type="button" role="menuitem" class="gcb-menu-item gcb-rename" hidden>Rename</button>
+        <button type="button" role="menuitem" class="gcb-menu-item gcb-update-preset" hidden>Update to current colours</button>
+        <button type="button" role="menuitem" class="gcb-menu-item gcb-delete-preset" hidden>Delete</button>
       </div>
       <span class="gcb-announce" aria-live="polite"></span>
       <div class="gcb-gradient-row">
@@ -711,6 +960,34 @@
         <div class="gcb-modes" role="radiogroup" aria-labelledby="gcb-text-label">
           ${TEXT_MODES.map((mode) => `<button type="button" class="gcb-mode" role="radio" data-mode="${mode}">${TEXT_LABELS[mode]}</button>`).join("")}
         </div>
+      </div>
+      <div class="gcb-presets">
+        <div class="gcb-presets-row">
+          <span class="gcb-label" id="gcb-presets-label">Presets</span>
+          <div class="gcb-presets-tools">
+            <button type="button" class="gcb-button gcb-share-button gcb-export" title="${EXPORT_TITLE}">${withClass(EXPORT_ICON, "gcb-export-icon")}${withClass(CHECK_ICON, "gcb-export-check", true)}<span class="gcb-share-text"><span class="gcb-share-label gcb-export-label">${EXPORT_LABEL}</span><span class="gcb-sizer" aria-hidden="true">${EXPORT_LABEL}</span><span class="gcb-sizer" aria-hidden="true">${COPIED_LABEL}</span></span></button>
+            <button type="button" class="gcb-button gcb-share-button gcb-import" title="${IMPORT_TITLE}" aria-expanded="false" aria-controls="gcb-import-panel">${IMPORT_ICON}<span class="gcb-share-label">Import</span></button>
+          </div>
+        </div>
+        <div class="gcb-chips" role="group" aria-labelledby="gcb-presets-label">
+          <div class="gcb-chip-row gcb-built-in-row"></div>
+          <div class="gcb-chip-row gcb-own-row">
+            <button type="button" class="gcb-chip gcb-save-chip">+ Save</button>
+            <input type="text" class="gcb-field gcb-name-field" maxlength="${PRESET_NAME_MAX}" spellcheck="false" autocomplete="off" aria-label="Preset name" hidden>
+          </div>
+        </div>
+        <div class="gcb-code-fallback" hidden>
+          <input type="text" class="gcb-field gcb-code-output" readonly spellcheck="false" aria-label="Share code (copy it from here)" aria-describedby="gcb-code-hint">
+          <p class="gcb-code-hint" id="gcb-code-hint">${COPY_HINT}</p>
+        </div>
+        <div class="gcb-import-panel" id="gcb-import-panel" hidden>
+          <div class="gcb-import-row">
+            <input type="text" class="gcb-field gcb-code-input" spellcheck="false" autocomplete="off" placeholder="gcb1:… or gpb1:…" aria-label="Paste a share code" aria-describedby="gcb-import-error">
+            <button type="button" class="gcb-button gcb-import-apply">Apply</button>
+          </div>
+          <p class="gcb-import-error" id="gcb-import-error" aria-live="polite"></p>
+        </div>
+        <p class="gcb-undo" aria-live="polite"><span class="gcb-undo-text"></span><button type="button" class="gcb-text-button gcb-undo-button" hidden>Undo</button></p>
       </div>
       <div class="gcb-preview" role="img" aria-label="Preview of the Connect bar">${withClass(DEVICE_ICON, "gcb-preview-icon")}<span class="gcb-preview-label">${PREVIEW_LABEL}</span></div>
       <div class="gcb-dots">
@@ -756,6 +1033,27 @@
       textLabel: root.querySelector("#gcb-text-label"),
       textModes: root.querySelector(".gcb-modes"),
       textButtons: [...root.querySelectorAll(".gcb-mode")],
+      presets: root.querySelector(".gcb-presets"),
+      presetsRow: root.querySelector(".gcb-presets-row"),
+      chips: root.querySelector(".gcb-chips"),
+      builtInRow: root.querySelector(".gcb-built-in-row"),
+      ownRow: root.querySelector(".gcb-own-row"),
+      saveChip: root.querySelector(".gcb-save-chip"),
+      nameField: root.querySelector(".gcb-name-field"),
+      exportButton: root.querySelector(".gcb-export"),
+      exportLabel: root.querySelector(".gcb-export-label"),
+      exportIcon: root.querySelector(".gcb-export-icon"),
+      exportCheck: root.querySelector(".gcb-export-check"),
+      codeFallback: root.querySelector(".gcb-code-fallback"),
+      importButton: root.querySelector(".gcb-import"),
+      codeOutput: root.querySelector(".gcb-code-output"),
+      importPanel: root.querySelector(".gcb-import-panel"),
+      codeInput: root.querySelector(".gcb-code-input"),
+      importApply: root.querySelector(".gcb-import-apply"),
+      importError: root.querySelector(".gcb-import-error"),
+      undoLine: root.querySelector(".gcb-undo"),
+      undoText: root.querySelector(".gcb-undo-text"),
+      undoButton: root.querySelector(".gcb-undo-button"),
       preview: root.querySelector(".gcb-preview"),
       previewIcon: root.querySelector(".gcb-preview-icon"),
       previewLabel: root.querySelector(".gcb-preview-label"),
@@ -772,6 +1070,9 @@
       announce: root.querySelector(".gcb-announce"),
       duplicateItem: root.querySelector(".gcb-duplicate"),
       removeItem: root.querySelector(".gcb-remove"),
+      renameItem: root.querySelector(".gcb-rename"),
+      updatePresetItem: root.querySelector(".gcb-update-preset"),
+      deletePresetItem: root.querySelector(".gcb-delete-preset"),
       picker: root.querySelector(".gcb-colour-picker"),
       sv: root.querySelector(".gcb-sv"),
       svHandle: root.querySelector(".gcb-sv-handle"),
@@ -810,12 +1111,14 @@
     enableDotMenu(m);
     enableColourPicker(m);
     enableReset(m);
+    enablePresets(m);
 
     Spicetify.PopupModal.display({ title: TITLE, content: root });
     evenPopupBottom(root);
     modal = m;
     selectedId = settings.stops[0].id; // the first dot is selected on open
     renderModal();
+    renderChips(m);
     watchModalClose(m);
     watchThemeColour(m);
     watchPopovers(m);
@@ -890,6 +1193,406 @@
     return !!(fill && text && main) && contrast(main, fill) > contrast(text, fill);
   }
 
+  // ── Presets row (#29) ──
+  // Ported from GPB 1.6.1. Two chip rows: the built-ins, then own presets and + Save. Applying is
+  // always two-step: the first click arms the chip ("Apply?"; hidden sizers keep its width) and
+  // previews it in the strip, text colour included; the second applies. Themes often hide the
+  // player behind the popup, and the bar only exists during remote playback, so the strip is the
+  // preview. No timeout while armed; the active chip does nothing. Undo for 10 s after applying,
+  // importing or deleting. Arming changes only a label and a class, in place; re-rendering the
+  // chip row (Save, Rename, Update, Delete) is deferred and closes the menu first, so a clicked
+  // chip or menu item is never detached during its own click.
+
+  const UNDO_MS = 10000;
+  const APPLY_LABEL = "Apply?";
+  const SAVE_LABEL = "Save the current settings as a preset";
+  const SAVE_FULL_LABEL = `Up to ${MAX_PRESETS} presets`;
+  const OWN_PRESET_HINT = "Right-click to rename, update or delete";
+
+  const chipEl = (id) => modal?.chips.querySelector(`.gcb-preset-chip[data-preset="${CSS.escape(id)}"]`) ?? null;
+  const isOwnPreset = (id) => presets.some((p) => p.id === id);
+
+  function enablePresets(m) {
+    m.chips.addEventListener("click", (e) => {
+      const chip = e.target.closest(".gcb-chip");
+      if (!chip || chip.disabled) return;
+      if (chip === m.saveChip) startNaming(m, "save");
+      else clickChip(m, chip);
+    });
+    // Own chips only: built-ins can't be renamed, updated or deleted, so they have no menu.
+    m.chips.addEventListener("contextmenu", (e) => {
+      const chip = e.target.closest(".gcb-preset-chip");
+      if (!chip || !isOwnPreset(chip.dataset.preset)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const id = chip.dataset.preset;
+      if (popover?.id === id && performance.now() - popover.openedAt < 500) return; // opened from keydown
+      const r = chip.getBoundingClientRect();
+      const onChip = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      openChipMenu(id, onChip ? { at: { x: e.clientX, y: e.clientY } } : { keyboard: true });
+    });
+    m.chips.addEventListener("keydown", (e) => {
+      const chip = e.target.closest(".gcb-preset-chip");
+      if (!chip || !isOwnPreset(chip.dataset.preset) || !(e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) return;
+      e.preventDefault();
+      openChipMenu(chip.dataset.preset, { keyboard: true });
+    });
+    m.chips.addEventListener("focusout", (e) => m.armed?.chip === e.target && disarmChip(m));
+    disarmOnOutsideInput(m, () => m.armed?.chip ?? null, () => disarmChip(m));
+
+    m.nameField.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        stopNaming(m, { commit: true });
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation(); // the field closes, not the modal
+        stopNaming(m, { refocus: true });
+      }
+    });
+    m.nameField.addEventListener("blur", () => stopNaming(m));
+
+    m.renameItem.addEventListener("click", () => runChipAction((id) => startNaming(m, "rename", id)));
+    m.updatePresetItem.addEventListener("click", () =>
+      runChipAction((id) => {
+        if (pendingUndo?.kind === "preset") clearUndo(); // a restored preset could clash with this change
+        if (updatePreset(id)) renderChipsLater(m, id);
+      })
+    );
+    m.deletePresetItem.addEventListener("click", () => runChipAction((id) => deleteWithUndo(m, id)));
+    m.undoButton.addEventListener("click", runUndo);
+    enableSharing(m);
+    m.cleanups.push(() => {
+      disarmChip(m);
+      clearUndo();
+    });
+  }
+
+  // ── Sharing (#36) ──
+  // Export puts a gcb1: code on the clipboard (writeClipboard()) and confirms on the button itself;
+  // only if every tier fails does the code show in a selected read-only field. Import is an inline
+  // paste field, never navigator.clipboard.readText() (that asks for a permission), and takes
+  // gcb1: and GPB's gpb1: codes. While the field holds a valid code the strip previews it; Apply
+  // is the deliberate step, with Undo.
+
+  const EXPORT_TITLE = "Copy a share code to the clipboard";
+  const IMPORT_TITLE = "Paste a share code (Gradient Connect Bar or Gradient Progress Bar)";
+  const EXPORT_LABEL = "Export";
+  const COPIED_LABEL = "Copied"; // on the button for COPIED_MS; hidden sizers keep its width
+  const COPIED_MS = 2000;
+  const COPY_HINT = /Mac/i.test(navigator.platform) ? "Press ⌘C to copy" : "Press Ctrl+C to copy";
+  const IMPORT_ERROR = "Not a valid code";
+  const PREVIEW_CODE_MESSAGE = "Previewing code — Apply to use it";
+  const IMPORTED = { gcb: "Imported code", gpb: "Imported code from Gradient Progress Bar" };
+
+  function enableSharing(m) {
+    m.exportButton.addEventListener("click", () => copyCode(m));
+    m.codeOutput.addEventListener("blur", () => (m.codeFallback.hidden = true));
+    m.importButton.addEventListener("click", () => toggleImport(m));
+    m.importApply.addEventListener("click", () => importCode(m));
+    m.codeInput.addEventListener("input", () => {
+      setImportError(m, false);
+      renderPreview(); // a valid code previews in the strip
+      renderStatus();
+    });
+    m.codeInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        importCode(m);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation(); // the field closes, not the modal
+        toggleImport(m, false);
+        m.importButton.focus({ preventScroll: true });
+      }
+    });
+    m.cleanups.push(() => clearTimeout(m.copiedTimer));
+  }
+
+  // Resolves to the tier that copied the code, or null when the fallback field shows instead.
+  async function copyCode(m) {
+    const code = encodeCode(settings);
+    const tier = await writeClipboard(code);
+    if (modal !== m) return tier;
+    showExportCopied(m, !!tier);
+    if (!tier) {
+      m.codeOutput.value = code;
+      m.codeFallback.hidden = false;
+      m.codeOutput.focus({ preventScroll: true });
+      m.codeOutput.select();
+      return null;
+    }
+    m.codeFallback.hidden = true;
+    m.announce.textContent = "Share code copied";
+    return tier;
+  }
+
+  // In place: only the label's text and which icon is hidden change, never the button.
+  function showExportCopied(m, copied) {
+    clearTimeout(m.copiedTimer);
+    m.exportLabel.textContent = copied ? COPIED_LABEL : EXPORT_LABEL;
+    m.exportIcon.toggleAttribute("hidden", copied);
+    m.exportCheck.toggleAttribute("hidden", !copied);
+    if (copied) m.copiedTimer = setTimeout(() => showExportCopied(m, false), COPIED_MS);
+  }
+
+  // Opening empties the field and closing ends its preview, so the strip shows the current
+  // settings either way.
+  function toggleImport(m, open = m.importPanel.hidden) {
+    m.importPanel.hidden = !open;
+    m.importButton.setAttribute("aria-expanded", String(open));
+    if (open) {
+      m.codeInput.value = "";
+      setImportError(m, false);
+      m.codeInput.focus({ preventScroll: true });
+    }
+    if (modal !== m) return;
+    renderPreview();
+    renderStatus();
+  }
+
+  function setImportError(m, invalid) {
+    if (invalid) m.codeInput.setAttribute("aria-invalid", "true");
+    else m.codeInput.removeAttribute("aria-invalid");
+    m.importError.textContent = invalid ? IMPORT_ERROR : "";
+  }
+
+  // An invalid code changes nothing. A valid one applies; the panel (with the clicked Apply in
+  // it) is hidden, not removed.
+  function importCode(m) {
+    const decoded = decodeCode(m.codeInput.value);
+    if (!decoded) {
+      setImportError(m, true);
+      return false;
+    }
+    toggleImport(m, false);
+    m.importButton.focus({ preventScroll: true });
+    applySettings(decoded.settings, IMPORTED[decoded.from], m.importButton);
+    return true;
+  }
+
+  // The active chip does nothing; any other is armed (and previewed) by the first click and
+  // applied by the second. A click on another chip disarms this one first (outside input), so
+  // browsing moves the arm and the preview chip by chip.
+  function clickChip(m, chip) {
+    const preset = presetById(chip.dataset.preset);
+    if (!preset || matchesPreset(preset)) return;
+    if (m.armed?.chip !== chip) return armChip(m, chip, preset);
+    disarmChip(m);
+    applySettings(presetSettings(preset), `Applied "${preset.name}"`, chip);
+  }
+
+  function armChip(m, chip, preset) {
+    disarmChip(m);
+    chip.classList.add("gcb-armed");
+    chip.querySelector(".gcb-chip-label").textContent = APPLY_LABEL;
+    chip.setAttribute("aria-label", `Apply "${preset.name}"?`);
+    m.armed = { chip, name: preset.name, settings: presetSettings(preset) };
+    renderPreview();
+    renderStatus();
+  }
+
+  function disarmChip(m) {
+    if (!m.armed) return;
+    const { chip } = m.armed;
+    m.armed = null;
+    const name = presetById(chip.dataset.preset)?.name ?? "";
+    chip.classList.remove("gcb-armed");
+    chip.querySelector(".gcb-chip-label").textContent = name;
+    chip.setAttribute("aria-label", name);
+    if (modal !== m) return;
+    renderPreview();
+    renderStatus();
+  }
+
+  // What the strip shows instead of the current settings: the armed chip's preset, or a valid
+  // code in the open Import field. Null when nothing is being previewed.
+  function previewing(m) {
+    if (m.armed) return { settings: m.armed.settings, message: `Previewing "${m.armed.name}" — click it again to apply, Esc to cancel` };
+    const code = m.importPanel.hidden ? null : decodeCode(m.codeInput.value);
+    return code && { settings: code.settings, message: PREVIEW_CODE_MESSAGE };
+  }
+
+  // Replaces the settings (selection back on the first dot) and offers Undo for the old ones.
+  // The text colour is recalculated at once, so the bar and the strip agree straight away.
+  function applySettings(next, message, focusAfterUndo = null) {
+    const previous = structuredClone(settings);
+    settings = next;
+    selectedId = settings.stops[0].id;
+    recalcTextColour();
+    update();
+    offerUndo(message, (hadFocus) => {
+      settings = previous;
+      selectedId = previous.stops[0].id;
+      recalcTextColour();
+      update();
+      if (hadFocus && focusAfterUndo?.isConnected) focusAfterUndo.focus({ preventScroll: true });
+    }, { trackSettings: true });
+  }
+
+  function deleteWithUndo(m, id) {
+    const removed = deletePreset(id);
+    if (!removed) return;
+    renderChipsLater(m, (presets[removed.index] ?? presets[removed.index - 1])?.id ?? "save");
+    offerUndo(`Deleted "${removed.preset.name}"`, (hadFocus) => {
+      restorePreset(removed);
+      renderChipsLater(m, hadFocus ? removed.preset.id : null);
+    }, { kind: "preset" });
+  }
+
+  // ── Undo ──
+  // One pending undo at a time: a new action replaces it. It lasts UNDO_MS, ends when the modal
+  // closes, and a settings undo also ends when the settings change some other way (update()).
+
+  let pendingUndo = null; // { message, kind, restore(hadFocus), after, timer }
+
+  function offerUndo(message, restore, { trackSettings = false, kind = "settings" } = {}) {
+    clearUndo();
+    const after = trackSettings ? JSON.stringify(settings) : null;
+    pendingUndo = { message, kind, restore, after, timer: setTimeout(clearUndo, UNDO_MS) };
+    renderStatus();
+  }
+
+  function clearUndo() {
+    if (!pendingUndo) return;
+    clearTimeout(pendingUndo.timer);
+    pendingUndo = null;
+    renderStatus();
+  }
+
+  // The Undo button is hidden, not removed, in its own click.
+  function runUndo() {
+    const undo = pendingUndo;
+    if (!undo) return;
+    const hadFocus = !!modal && document.activeElement === modal.undoButton;
+    clearUndo();
+    undo.restore(hadFocus);
+  }
+
+  // The status line under the chips: a preview's message wins; when the preview ends, a
+  // still-running Undo shows again.
+  function renderStatus() {
+    if (!modal) return;
+    const preview = previewing(modal);
+    const undo = !preview && pendingUndo;
+    modal.undoLine.classList.toggle("gcb-has-status", !!(preview || undo));
+    modal.undoText.textContent = preview ? preview.message : undo ? `${undo.message} · ` : "";
+    modal.undoButton.hidden = !undo;
+  }
+
+  // ── Chip row rendering ──
+
+  function renderChips(m) {
+    disarmChip(m);
+    if (!m.naming) m.saveChip.after(m.nameField);
+    for (const chip of m.chips.querySelectorAll(".gcb-preset-chip")) chip.remove();
+    m.builtInRow.append(...BUILT_IN_PRESETS.map(presetChip)); // row 1: the built-ins only
+    for (const preset of presets) m.saveChip.before(presetChip(preset)); // row 2: own presets, then + Save
+    const full = presets.length >= MAX_PRESETS;
+    m.saveChip.disabled = full;
+    m.saveChip.title = full ? SAVE_FULL_LABEL : SAVE_LABEL;
+    renderPresetStates();
+  }
+
+  // After Save, Rename, Update and Delete: deferred, with the menu closed first.
+  function renderChipsLater(m, focusId = null) {
+    closePopover();
+    disarmChip(m);
+    setTimeout(() => {
+      if (modal !== m) return;
+      renderChips(m);
+      const target = focusId === "save" ? m.saveChip : focusId ? chipEl(focusId) : null;
+      target?.focus({ preventScroll: true });
+    }, 0);
+  }
+
+  // A pill: a 12 px swatch painted with the preset's barImage(), and the name. Names are user
+  // text, so they only ever go in through textContent.
+  function presetChip(preset) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "gcb-chip gcb-preset-chip";
+    chip.dataset.preset = preset.id;
+    chip.setAttribute("aria-pressed", "false");
+    chip.setAttribute("aria-label", preset.name);
+    chip.title = preset.builtIn ? preset.name : `${preset.name}\n${OWN_PRESET_HINT}`;
+    chip.innerHTML =
+      '<span class="gcb-chip-swatch" aria-hidden="true"></span><span class="gcb-chip-text">' +
+      '<span class="gcb-chip-label" aria-live="polite"></span><span class="gcb-sizer" aria-hidden="true"></span>' +
+      `<span class="gcb-sizer" aria-hidden="true">${APPLY_LABEL}</span></span>`;
+    chip.querySelector(".gcb-chip-swatch").style.backgroundImage = barImage(presetSettings(preset));
+    chip.querySelector(".gcb-chip-label").textContent = preset.name;
+    chip.querySelector(".gcb-sizer").textContent = preset.name;
+    return chip;
+  }
+
+  // The chip whose settings equal the current ones is marked active.
+  function renderPresetStates() {
+    if (!modal) return;
+    for (const chip of modal.chips.querySelectorAll(".gcb-preset-chip")) {
+      const preset = presetById(chip.dataset.preset);
+      chip.setAttribute("aria-pressed", String(!!preset && matchesPreset(preset)));
+    }
+  }
+
+  // ── Naming (+ Save, Rename) ──
+  // One inline name field (not a popover) takes the place of the + Save chip or of the chip
+  // being renamed. Enter saves, Escape cancels, and so does leaving the field.
+
+  function startNaming(m, mode, id = null) {
+    if (m.naming) return;
+    const preset = mode === "rename" ? presets.find((p) => p.id === id) : null;
+    const chip = mode === "rename" ? chipEl(id) : m.saveChip;
+    if (!chip || (mode === "rename" && !preset)) return;
+    disarmChip(m);
+    m.naming = { mode, id, chip };
+    chip.before(m.nameField);
+    chip.hidden = true; // hidden, not removed: it may be the element being clicked
+    m.nameField.value = preset ? preset.name : defaultPresetName();
+    m.nameField.setAttribute("aria-label", preset ? `New name for "${preset.name}"` : "Preset name");
+    m.nameField.hidden = false;
+    m.nameField.focus({ preventScroll: true });
+    m.nameField.select();
+  }
+
+  function stopNaming(m, { commit = false, refocus = false } = {}) {
+    const naming = m.naming;
+    if (!naming) return;
+    m.naming = null;
+    m.nameField.hidden = true;
+    m.saveChip.after(m.nameField);
+    naming.chip.hidden = false;
+    if (!commit) {
+      if (refocus) naming.chip.focus({ preventScroll: true });
+      return;
+    }
+    if (pendingUndo?.kind === "preset") clearUndo(); // a restored preset could clash with this change
+    if (naming.mode === "save") renderChipsLater(m, addPreset(m.nameField.value)?.id ?? "save");
+    else {
+      renamePreset(naming.id, m.nameField.value); // an empty name keeps the old one
+      renderChipsLater(m, naming.id);
+    }
+  }
+
+  // ── Chip menu ──
+  // The dot menu's popover with the preset items instead: inside the modal root, hidden, never
+  // removed.
+
+  function openChipMenu(id, { at = null, keyboard = false } = {}) {
+    const anchor = chipEl(id);
+    if (!anchor || !isOwnPreset(id)) return;
+    disarmChip(modal);
+    setMenuKind("chip");
+    if (showPopover(id, modal.menu, at, anchor) && keyboard) menuItems()[0]?.focus({ preventScroll: true });
+  }
+
+  function runChipAction(action) {
+    if (!popover) return;
+    const { id } = popover;
+    closePopover();
+    action(id);
+  }
+
   // ── Two-step Reset ──
   // Reset can't be undone, so the first click only arms it ("Confirm reset?" in red); a second
   // click within RESET_CONFIRM_MS resets. Only the label and a class change — the button node is
@@ -924,7 +1627,7 @@
     m.cleanups.push(disarm); // clears the timer when the modal closes
   }
 
-  // An armed two-step button disarms on Escape — stopped there, so the modal stays — and on any
+  // An armed two-step button (Reset, a preset chip) disarms on Escape — stopped there, so the modal stays — and on any
   // pointerdown, click or keydown elsewhere. Enter/Space on the button itself is the confirmation.
   // `armedEl()` returns the armed element or null.
   function disarmOnOutsideInput(m, armedEl, disarm) {
@@ -1151,7 +1854,15 @@
 
   const menuItems = () => [...modal.menu.querySelectorAll(".gcb-menu-item:not(:disabled):not([hidden])")];
 
+  // One menu element for dots (Duplicate, Remove) and own preset chips (Rename, Update, Delete).
+  function setMenuKind(kind) {
+    for (const item of [modal.duplicateItem, modal.removeItem]) item.hidden = kind !== "dot";
+    for (const item of [modal.renameItem, modal.updatePresetItem, modal.deletePresetItem]) item.hidden = kind !== "chip";
+    modal.menu.setAttribute("aria-label", kind === "dot" ? "Colour actions" : "Preset actions");
+  }
+
   function openMenu(id, { at = null, keyboard = false } = {}) {
+    setMenuKind("dot");
     modal.duplicateItem.disabled = settings.stops.length >= MAX_STOPS;
     modal.removeItem.disabled = settings.stops.length <= 1;
     if (showPopover(id, modal.menu, at) && keyboard) menuItems()[0]?.focus({ preventScroll: true });
@@ -1555,30 +2266,42 @@
   }
 
   // The bar as it would look (#7): the bar's own colour underneath, the same background-image
-  // string as the stylesheet on top. Only inline styles of our own element change, in place.
+  // string as the stylesheet on top, and the text colour the settings give. It shows the current
+  // settings, or the preset or code being previewed (#29, #36). Only inline styles of our own
+  // element change, in place.
   function renderPreview() {
     const { preview } = modal;
+    const shown = previewing(modal)?.settings ?? settings;
     preview.style.backgroundColor = barBase();
-    preview.style.backgroundImage = isInert(settings) ? "none" : barImage(settings);
-    preview.style.color = previewTextColour();
+    preview.style.backgroundImage = isInert(shown) ? "none" : barImage(shown);
+    preview.style.color = textColourFor(shown);
   }
 
-  // What Spotify draws the text in: the live bar's text colour, else Spicetify's mapping for
+  // What Spotify draws the text in: the live bar's text colour, read only while our rule doesn't
+  // set it (otherwise it's ours), else the last one read, else Spicetify's mapping for
   // .encore-bright-accent-set (--text-base: var(--spice-sidebar)).
   let lastBarText = null;
 
   function spotifyTextColour() {
     const link = findBar()?.querySelector(BAR_LINK);
-    if (link) {
+    const ours = document.getElementById("gcb-style")?.textContent.includes("--text-base");
+    if (link && !ours) {
       const span = link.querySelector("span") ?? link;
       const rgb = parseRgb(getComputedStyle(span).color);
-      if (rgb) lastBarText = rgbToHex(rgb.slice(0, 3).map(Math.round));
+      if (rgb) lastBarText = rgbToHex(rgb.map(Math.round));
     }
     return lastBarText || rootColour("--spice-sidebar") || "#000000";
   }
 
-  // The preview's label and icon: the colour written into the bar's rule, or Spotify's own.
-  const previewTextColour = () => appliedTextColour() ?? spotifyTextColour();
+  // The text colour settings `s` give the bar: Black and White literally, Spotify's own for
+  // Spotify default, and for Auto the current choice or, for other settings (a previewed preset or
+  // code), Auto computed for their colours over the last text region.
+  function textColourFor(s) {
+    if (s.textColour === "default") return spotifyTextColour();
+    if (s.textColour !== "auto") return appliedTextColour(s);
+    if (s === settings && textResult?.colour) return textResult.colour;
+    return pickTextColour(gradientSamples(s, textRegion ?? { from: 0, to: 1 }, textContext())).colour;
+  }
 
   function renderStops() {
     const row = modal.stopsRow;
@@ -1740,6 +2463,11 @@
       textColour: textStatus(),
       entry: startup.entry,
       phase: startup.phase,
+      entryErrors: startup.entryErrors,
+      menu: { registered: menuRegistered, menuItemUsable: menuItemUsable() }, // info only, never a check
+      topbar: { created: !!shared?.button, connected: !!shared?.button?.element?.isConnected },
+      shared: shared?.status() ?? null,
+      spicetifyFixes: otherFixes(), // whether the separate spicetify-fixes extension is what makes the entries work
       startupError: startup.error,
       dom: domProbe(), // includes an outline of the bar and the aside, for selector fixes after Spotify updates
     };
@@ -1757,9 +2485,13 @@
     const skip = (issue, name, reason = NO_BAR) =>
       results.push({ id: results.length + 1, issue: `#${issue}`, check: name, pass: null, skipped: reason, detail: "" });
 
+    // The entries can take up to 15 s to register (the profile menu waits for ReactJSX).
+    for (let waited = 0; startup.phase === "registering entry point" && waited < 21000; waited += 300) await sleep(300);
     const env = environment();
     const savedSettings = structuredClone(settings);
     const savedRaw = Spicetify.LocalStorage.get(STORAGE_KEY);
+    const savedPresets = structuredClone(presets); // #29
+    const savedPresetsRaw = Spicetify.LocalStorage.get(PRESETS_KEY);
     const rootStyle = document.documentElement.style;
     const savedButton = [rootStyle.getPropertyValue("--spice-button"), rootStyle.getPropertyPriority("--spice-button")];
     const restoreButton = () =>
@@ -1777,6 +2509,7 @@
         env.copies.length === 1
           ? env.copies[0]
           : `${env.copies.length} copies: ${env.copies.join(", ") || "none found"} (running: ${SOURCE ?? "unknown"}). Keep either the Marketplace install or the local CLI install (spicetify config extensions gradientConnectBar.js-), not both.`);
+      await checkEntries(check, skip);
       await runChecks(check, skip, rootStyle, restoreButton);
     } catch (e) {
       check(9, "Self-test ran to completion", false, e?.stack || e);
@@ -1792,6 +2525,9 @@
       recalcTextColour(); // the stylesheet and the text colour for the restored settings
       if (savedRaw == null) Spicetify.LocalStorage.remove(STORAGE_KEY);
       else Spicetify.LocalStorage.set(STORAGE_KEY, savedRaw);
+      presets = savedPresets;
+      if (savedPresetsRaw == null) Spicetify.LocalStorage.remove(PRESETS_KEY);
+      else Spicetify.LocalStorage.set(PRESETS_KEY, savedPresetsRaw);
       selfTestRunning = false;
     }
 
@@ -1808,6 +2544,176 @@
     const copied = !!(await writeClipboard(JSON.stringify(report, null, 2)));
     console.log(copied ? "[gcb] Full report copied to the clipboard." : "[gcb] Couldn't copy the report — it's the return value.");
     return report;
+  }
+
+  // ── Entry points (#34, #35) ──
+  async function checkEntries(check, skip) {
+    const st = statusReport();
+    const menuApplicable = !!(api("Menu")?.Item && api("ReactJSX"));
+    check(35, "Profile-menu entry registered without throwing (its own entry, guarded by menuItemUsable())", !menuApplicable || menuRegistered,
+      menuApplicable
+        ? startup.entryErrors.filter((e) => e.startsWith("Menu:")).join("; ") || `registered${menuItemUsable() ? "" : ", hidden while Spicetify's MenuItem is broken (spicetify/cli#4012)"}`
+        : `not applicable: Spicetify.Menu.Item ${api("Menu")?.Item ? "exists" : "missing"}, Spicetify.ReactJSX ${api("ReactJSX") ? "exists" : "missing"}`);
+    check(34, "Entry icon is GPB's: currentColor, 16 × 16 viewBox, no id= and no <defs>",
+      ENTRY_ICON.includes("currentColor") && ENTRY_ICON.includes('viewBox="0 0 16 16"') && !ENTRY_ICON.includes("id=") && !ENTRY_ICON.includes("<defs"),
+      `${ENTRY_ICON.length} characters`);
+    check(34, "status() reports topbar, shared, entryErrors, menu and apis.ReactJSX",
+      !!st.topbar && "created" in st.topbar && "connected" in st.topbar && !!st.shared && Array.isArray(st.entryErrors) &&
+        !!st.menu && "menuItemUsable" in st.menu && "ReactJSX" in st.apis,
+      JSON.stringify({ topbar: st.topbar, shared: st.shared, menu: st.menu }));
+    const role = shared?.role ?? "none";
+    check(34, "Top-bar entry: our own button (owner, or next to another protocol) or the owner's shared one (member)",
+      !api("Topbar")?.Button || (role === "member" ? !shared.button && !!shared.registry?.entries.some((e) => e.id === SELF.id) : !!shared?.button),
+      !api("Topbar")?.Button
+        ? "not applicable: Spicetify.Topbar.Button missing"
+        : `${role}${shared?.button ? `, button "${shared.button.label}" ${shared.button.element?.isConnected ? "on screen" : "not on screen yet"}` : ", no button of ours"}`);
+
+    // The live registry: never touched by the self-test.
+    const reg = window.__gradientBars;
+    if (role.startsWith("own button")) check(34, "Live registry: protocol 1, our entry exactly once, sorted by name", true, `not ours to check: ${role}`);
+    else {
+      const names = reg?.entries.map((e) => e.name) ?? [];
+      check(34, "Live registry: protocol 1, our entry exactly once, sorted by name",
+        reg?.protocol === 1 && reg.entries.filter((e) => e.id === SELF.id).length === 1 &&
+          names.join("|") === [...names].sort((a, b) => a.localeCompare(b)).join("|") && shared.registry === reg,
+        `owner ${reg?.owner}, entries ${reg?.entries.map((e) => e.id).join(", ")}`);
+    }
+    const gpb = window.__gpb;
+    if (!gpb) skip(34, "With Gradient Progress Bar: exactly one top-bar button, the owner's", "Gradient Progress Bar isn't running");
+    else if (!reg?.entries.some((e) => e.id === "gpb"))
+      skip(34, "With Gradient Progress Bar: exactly one top-bar button, the owner's",
+        `Gradient Progress Bar ${gpb.version} doesn't share the button yet: two buttons are expected until it does`);
+    else {
+      const created = { gcb: !!window.__gcb.status().topbar?.created, gpb: !!gpb.status?.().topbar?.created };
+      check(34, "With Gradient Progress Bar: exactly one top-bar button, the owner's",
+        Object.values(created).filter(Boolean).length === 1 && created[reg.owner], `owner ${reg.owner}; created ${JSON.stringify(created)}`);
+    }
+
+    // A separate instance from the same factory: its own key and prefix, fake buttons, stub
+    // opens; removed afterwards.
+    const KEY = "__gradientBarsSelfTest";
+    const OTHER_KEY = "__gradientBarsSelfTestOther";
+    const PREFIX = "gradient-bars-selftest";
+    const liveBefore = window.__gradientBars;
+    const liveEntries = liveBefore?.entries.map((e) => e.id).join();
+    const opened = [];
+    const buttons = [];
+    const fakeButton = (label, icon, onClick) => {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = `${PREFIX}-anchor`;
+      el.textContent = "♪";
+      Object.assign(el.style, { position: "fixed", top: "12px", right: "60px", width: "32px", height: "32px", zIndex: "99999" });
+      el.addEventListener("click", () => onClick());
+      document.body.append(el);
+      const fake = { element: el, label, icon };
+      buttons.push(fake);
+      return fake;
+    };
+    const entry = (id, name) => ({ id: `${id}-selftest`, name, open: () => opened.push(id) });
+    const clickAt = (el, keyboard = false) => el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: keyboard ? 0 : 1 }));
+    const key = (el, k) => el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    const menuEl = () => document.getElementById(`${PREFIX}-menu`);
+    const shown = () => !!menuEl() && !menuEl().hidden;
+    const menuItems = () => [...(menuEl()?.querySelectorAll(`.${PREFIX}-item`) ?? [])];
+    let a, b, c;
+    try {
+      a = joinGradientBars({ self: entry("gcb", "Gradient Connect Bar"), key: KEY, prefix: PREFIX, createButton: fakeButton });
+      a.ensureButton();
+      const anchor = a.button?.element;
+      clickAt(anchor);
+      check(34, "Protocol test instance, one entry: the owner's button opens it directly (no menu), labelled with its name",
+        a.role === "owner" && window[KEY]?.protocol === 1 && opened.join() === "gcb" && !shown() && a.button.label === "Gradient Connect Bar",
+        `role ${a.role}, opened ${opened.join() || "nothing"}, menu ${shown() ? "shown" : "none"}, label "${a.button?.label}"`);
+
+      b = joinGradientBars({ self: entry("gpb", "Gradient Progress Bar"), key: KEY, prefix: PREFIX, createButton: fakeButton });
+      const memberButton = b.ensureButton();
+      opened.length = 0;
+      clickAt(anchor);
+      const names = menuItems().map((el) => el.textContent).join(", ");
+      const r = anchor.getBoundingClientRect();
+      const mr = menuEl()?.getBoundingClientRect();
+      const roles = menuEl()?.getAttribute("role") === "menu" && menuItems().every((el) => el.getAttribute("role") === "menuitem");
+      check(34, "Two entries: one button only ('Gradient bars'); a click shows the menu with both, in name order, 8 px below the button, right edges aligned",
+        b.role === "member" && !memberButton && buttons.length === 1 && a.button.label === "Gradient bars" && shown() && roles &&
+          names === "Gradient Connect Bar, Gradient Progress Bar" && !opened.length && document.activeElement !== menuItems()[0] &&
+          Math.abs(mr.top - (r.bottom + 8)) <= 1 && Math.abs(mr.right - r.right) <= 1 && menuEl().parentElement === document.body,
+        `member ${b.role}, buttons ${buttons.length}, label "${a.button.label}", items ${names}; menu ${mr ? `${mr.left.toFixed(0)},${mr.top.toFixed(0)}–${mr.right.toFixed(0)}` : "none"}, button bottom ${r.bottom.toFixed(0)}, right ${r.right.toFixed(0)}`);
+
+      const steps = [];
+      const step = (label, ok) => steps.push(`${label}${ok ? "" : " ✗"}`);
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      step("outside pointerdown closes", !shown());
+      anchor.focus();
+      clickAt(anchor, true);
+      const items = menuItems();
+      step("keyboard open focuses the first item", shown() && document.activeElement === items[0]);
+      key(document.activeElement, "ArrowDown");
+      step("↓", document.activeElement === items[1]);
+      key(document.activeElement, "ArrowDown");
+      step("↓ wraps", document.activeElement === items[0]);
+      key(document.activeElement, "ArrowUp");
+      step("↑ wraps", document.activeElement === items[1]);
+      key(document.activeElement, "Home");
+      step("Home", document.activeElement === items[0]);
+      key(document.activeElement, "End");
+      step("End", document.activeElement === items[1]);
+      key(document.activeElement, "Escape");
+      step("Escape closes and refocuses the button", !shown() && document.activeElement === anchor);
+      clickAt(anchor, true);
+      key(document.activeElement, "Tab");
+      step("Tab closes", !shown());
+      clickAt(anchor);
+      window.dispatchEvent(new Event("blur"));
+      step("window blur closes", !shown());
+      clickAt(anchor);
+      window.dispatchEvent(new Event("resize"));
+      step("resize closes", !shown());
+      clickAt(anchor);
+      clickAt(anchor);
+      step("a second click on the button closes", !shown());
+      check(34, "Menu keyboard and closing: first item focused from the keyboard, ↑/↓ wrap, Home/End, Escape, Tab, outside pointerdown, blur, resize",
+        !steps.some((x) => x.endsWith("✗")), steps.join("; "));
+
+      opened.length = 0;
+      clickAt(anchor);
+      const second = menuItems()[1];
+      second.click();
+      const hiddenFirst = !shown() && !opened.length && second.isConnected;
+      await tick();
+      const thenOpened = opened.join();
+      anchor.focus();
+      clickAt(anchor, true);
+      key(document.activeElement, "Enter");
+      const enterHidden = !shown() && opened.length === 1;
+      await tick();
+      check(34, "Activating an item hides the menu first, then opens that entry in the next task (click and Enter)",
+        hiddenFirst && thenOpened === "gpb" && enterHidden && opened.join() === "gpb,gcb",
+        `hidden first ${hiddenFirst}, then opened ${thenOpened}; Enter: hidden first ${enterHidden}, opened ${opened.join()}`);
+
+      window[OTHER_KEY] = { protocol: 2, entries: [] };
+      c = joinGradientBars({ self: entry("gcb", "Gradient Connect Bar"), key: OTHER_KEY, prefix: `${PREFIX}-other`, createButton: fakeButton });
+      c.ensureButton();
+      opened.length = 0;
+      clickAt(c.button.element);
+      check(34, "Another protocol: own button path, its own label, opens directly, the foreign registry untouched",
+        c.role === "own button (protocol 2)" && !c.registry && c.button?.label === "Gradient Connect Bar" && opened.join() === "gcb" &&
+          JSON.stringify(window[OTHER_KEY]) === JSON.stringify({ protocol: 2, entries: [] }) && c.status().role === "own button (protocol 2)",
+        `role ${c.role}, label "${c.button?.label}", opened ${opened.join()}, registry ${JSON.stringify(window[OTHER_KEY])}`);
+    } catch (e) {
+      check(34, "Protocol test instance ran", false, e?.stack || e);
+    } finally {
+      a?.dispose();
+      b?.dispose();
+      c?.dispose();
+      delete window[KEY];
+      delete window[OTHER_KEY];
+      for (const fake of buttons) fake.element.remove();
+    }
+    check(34, "The live registry is untouched by the test instance; nothing of the test instance is left",
+      window.__gradientBars === liveBefore && window.__gradientBars?.entries.map((e) => e.id).join() === liveEntries &&
+        !(KEY in window) && !(OTHER_KEY in window) && !document.querySelector(`[id^="${PREFIX}"], [class^="${PREFIX}"]`),
+      `live entries ${window.__gradientBars?.entries.map((e) => e.id).join() ?? "none"}`);
   }
 
   async function runChecks(check, skip, rootStyle, restoreButton) {
@@ -2494,8 +3400,8 @@
     const textShows = (mode) =>
       settings.textColour === mode && m.textButtons.every((b, i) => b === textRowNodes[i] && b.isConnected &&
         (b.getAttribute("aria-checked") === "true") === (b.dataset.mode === mode) && b.tabIndex === (b.dataset.mode === mode ? 0 : -1));
-    check(11, "Text colour row between the Gradient row and the preview: a radiogroup of Auto, Black, White, Spotify default; no <select>",
-      m.gradientRow.nextElementSibling === m.text && m.text.nextElementSibling === m.preview && m.textModes.getAttribute("role") === "radiogroup" &&
+    check(11, "Text colour row between the Gradient row and the Presets row: a radiogroup of Auto, Black, White, Spotify default; no <select>",
+      m.gradientRow.nextElementSibling === m.text && m.text.nextElementSibling === m.presets && m.textModes.getAttribute("role") === "radiogroup" &&
         m.textModes.getAttribute("aria-labelledby") === "gcb-text-label" &&
         m.textButtons.map((b) => b.textContent).join() === "Auto,Black,White,Spotify default" &&
         m.textButtons.every((b) => b.tagName === "BUTTON" && b.getAttribute("role") === "radio") && !m.root.querySelector("select") &&
@@ -2515,9 +3421,10 @@
         recalcTextColour({ region: { from: 0, to: 1 } });
         window.__gcb.status();
         const extra = [...m.text.children].filter((el) => el !== m.textLabel && el !== m.textModes);
-        const hintLike = m.root.querySelector('.gcb-text-hint, .gcb-warning, [id$="-hint"], [aria-describedby]');
-        const words = /\d(\.\d)?:1\b|4\.5|contrast|readab|warning/i.exec(m.text.textContent + (m.text.nextElementSibling === m.preview ? "" : m.text.nextElementSibling?.textContent ?? ""));
-        const gap = m.preview.getBoundingClientRect().top - m.text.getBoundingClientRect().bottom;
+        const hintLike = m.root.querySelector(".gcb-text-hint, .gcb-warning") ?? m.text.querySelector('[id$="-hint"], [aria-describedby]') ??
+          (m.text.nextElementSibling === m.presets ? null : m.text.nextElementSibling);
+        const words = /\d(\.\d)?:1\b|4\.5|contrast|readab|warning/i.exec(m.text.textContent);
+        const gap = m.presets.getBoundingClientRect().top - m.text.getBoundingClientRect().bottom;
         const rowGap = parseFloat(getComputedStyle(m.root).rowGap);
         if (!textShows(mode) || extra.length || hintLike || words || Math.abs(gap - rowGap) > 0.5)
           hintProblems.push(`${mode}: ${extra.length} extra element(s), ${hintLike ? `.${hintLike.className}` : "no hint element"}, ` +
@@ -2527,7 +3434,7 @@
       console.warn = warn;
     }
     recalcTextColour();
-    check(11, "No hint or warning under the Text colour row in any of the four modes, nothing logged; the row sits the modal's normal gap above the preview",
+    check(11, "No hint or warning under the Text colour row in any of the four modes, nothing logged; the Presets row follows at the modal's normal gap",
       !hintProblems.length && !ourWarnings.length,
       [...hintProblems, ...ourWarnings].join("; ") || `${TEXT_MODES.join(", ")}: no hint, ${m.text.children.length} children (label, radiogroup)`);
 
@@ -2581,6 +3488,454 @@
     check(11, "The checked text colour button is filled with a runtime --spice-button; its label reaches 4.5:1 on a dark and a light probe",
       !fillProblems.length, fillProblems.join("; ") || "both probes fine");
 
+    // ── Presets and share codes (#29, #36) ──
+    // Store and codes first: pure functions on crafted raw values, counting [gcb] warnings per load.
+    const gcbWarnings = (fn) => {
+      const original = console.warn;
+      let count = 0;
+      console.warn = (...args) => (String(args[0]).startsWith("[gcb]") ? count++ : original(...args));
+      try {
+        return [fn(), count];
+      } finally {
+        console.warn = original;
+      }
+    };
+    const presetsJson = (list) => JSON.stringify({ version: PRESETS_VERSION, presets: list });
+    const own = (id, name, sets) => ({ id, name, settings: sets });
+    const sampleA = { gradient: true, textColour: "white", stops: [theme("s1"), custom("s2", RED)] };
+    const sampleB = { gradient: false, textColour: "default", stops: [custom("s1", BLUE)] };
+    const names = (list) => list.map((p) => p.name).join(", ");
+
+    presets = [own("p1", "One", sampleA), own("p2", "Two", sampleB)];
+    savePresets();
+    const [reloadedPresets, reloadWarnings] = gcbWarnings(() => loadPresets());
+    check(29, "Presets store: save → load round-trip in gcb:presets (theme and custom stops, gradient, text colour); gcb:settings untouched",
+      JSON.stringify(reloadedPresets) === JSON.stringify(presets) && !reloadWarnings && PRESETS_KEY === "gcb:presets" &&
+        JSON.parse(Spicetify.LocalStorage.get(PRESETS_KEY)).version === PRESETS_VERSION,
+      `${names(reloadedPresets)}; ${reloadWarnings} warning(s); ${Spicetify.LocalStorage.get(PRESETS_KEY).length} characters`);
+    const [kept, dropWarnings] = gcbWarnings(() => loadPresets(presetsJson([
+      own("p1", "  Good  ", sampleA),
+      own("p2", "Bad hex", { ...sampleA, stops: [custom("s1", "#12345")] }),
+      own("p3", "   ", sampleB),
+      own("p4", "x".repeat(PRESET_NAME_MAX + 1), sampleB),
+      own("p5", "Bad text colour", { ...sampleB, textColour: "grey" }),
+      { id: "p6", name: "No settings" },
+      own("p1", "Same id", sampleB),
+      own("p7", "good", sampleB),
+    ])));
+    check(29, "Invalid presets are dropped with one [gcb] warning; names trimmed; a name clash gets ' (2)'",
+      names(kept) === "Good, good (2)" && dropWarnings === 1, `kept ${names(kept)}; ${dropWarnings} warning(s)`);
+    const corrupt = ["{nope", JSON.stringify({ version: 2, presets: [] }), JSON.stringify([1, 2]), JSON.stringify({ version: 1 })]
+      .map((raw) => gcbWarnings(() => loadPresets(raw)));
+    check(29, "A corrupt or unknown gcb:presets gives an empty list and one warning",
+      corrupt.every(([list, warnings]) => list.length === 0 && warnings === 1),
+      corrupt.map(([list, warnings]) => `${list.length} presets/${warnings} warning(s)`).join(", "));
+    const [capped, capWarnings] = gcbWarnings(() =>
+      loadPresets(presetsJson(Array.from({ length: MAX_PRESETS + 2 }, (_, i) => own(`p${i + 1}`, `Mine ${i + 1}`, sampleB))))
+    );
+    presets = [own("p1", "Mine", sampleB)];
+    const clashes = [uniqueName("Mine"), uniqueName("fairy"), uniqueName(" Spaced "), uniqueName("y".repeat(30))];
+    presets = [own("p1", "y".repeat(PRESET_NAME_MAX), sampleB)];
+    const longClash = uniqueName("y".repeat(PRESET_NAME_MAX));
+    check(29, `At most ${MAX_PRESETS} presets load; names are unique (built-ins included, any case), trimmed and ≤ ${PRESET_NAME_MAX} characters`,
+      capped.length === MAX_PRESETS && capWarnings === 1 &&
+        clashes.join("|") === `Mine (2)|fairy (2)|Spaced|${"y".repeat(PRESET_NAME_MAX)}` &&
+        longClash.length === PRESET_NAME_MAX && longClash.endsWith(" (2)"),
+      `${capped.length} loaded, ${capWarnings} warning(s); ${clashes.join(" | ")} | ${longClash}`);
+    presets = [];
+    savePresets();
+    check(29, "Built-ins can't be deleted, renamed or updated",
+      deletePreset("b:fairy") === null && !renamePreset("b:fairy", "Sea") && !updatePreset("b:fairy") && BUILT_IN_PRESETS[4].name === "Fairy",
+      BUILT_IN_PRESETS.map((p) => p.id).join());
+    const builtInColours = {
+      "b:void": ["Void", "#8372fd,#5a82ff,#8372fd"], "b:sunset": ["Sunset", "#6e33ff,#ff5f6d,#ffc371"],
+      "b:aurora": ["Aurora", "#00f5a0,#00d9f5,#7f5af0"], "b:neon": ["Neon", "#ff00cc,#3333ff,#33f7ff"], "b:fairy": ["Fairy", "#ff59d1,#ffb800,#77bc00"],
+    };
+    const builtInMismatches = Object.entries(builtInColours).filter(([id, [name, colours]], i) => {
+      const preset = BUILT_IN_PRESETS[i];
+      const applied = preset && presetSettings(preset, { textColour: "black" });
+      const back = applied && decodeCode(encodeCode(applied));
+      return !preset || preset.id !== id || preset.name !== name || preset.colours.join() !== colours ||
+        applied.textColour !== "black" || !applied.gradient || !back || !sameSettings(back.settings, applied);
+    }).map(([id]) => id);
+    check(29, "The built-ins are GPB's five (Void, Sunset, Aurora, Neon, Fairy: ids, order, colours); applied they keep the current text colour",
+      BUILT_IN_PRESETS.length === 5 && !builtInMismatches.length,
+      builtInMismatches.length ? `mismatch: ${builtInMismatches.join(", ")}` : BUILT_IN_PRESETS.map((p) => `${p.name} ${p.colours.join("→")}`).join("; "));
+    const [renamedOnLoad, renameWarnings] = gcbWarnings(() =>
+      loadPresets(presetsJson([own("p3", "fairy", sampleB), own("p1", "Void", sampleA), own("p2", "Ocean", sampleB)]))
+    );
+    check(29, "Stored own presets whose names clash with a built-in are renamed on load (' (2)'), ids unchanged, no warning",
+      names(renamedOnLoad) === "fairy (2), Void (2), Ocean" && renamedOnLoad.map((p) => p.id).join() === "p3,p1,p2" && !renameWarnings,
+      `${names(renamedOnLoad)}; ids ${renamedOnLoad.map((p) => p.id).join()}; ${renameWarnings} warning(s)`);
+
+    // Share codes (#36): the fixtures GPB's self-test uses too, so both sides agree.
+    const FIXTURES = {
+      gpbVoid: "gpb1:eyJnIjoxLCJtIjoiYyIsInMiOlsiODM3MmZkIiwiNWE4MmZmIiwiODM3MmZkIl19",
+      gpbThemeAnchored: "gpb1:eyJnIjoxLCJtIjoiYSIsInMiOlsidCIsImZmNWY2ZCJdfQ",
+      gcbVoidAuto: "gcb1:eyJnIjoxLCJ4IjoiYSIsInMiOlsiODM3MmZkIiwiNWE4MmZmIiwiODM3MmZkIl19",
+      gcbThemeWhite: "gcb1:eyJnIjoxLCJ4IjoidyIsInMiOlsidCIsImZmNWY2ZCJdfQ",
+      gcbSolidThemeDefault: "gcb1:eyJnIjowLCJ4IjoiZCIsInMiOlsidCJdfQ",
+    };
+    const shape = (decoded) => decoded
+      ? `${decoded.from}: g ${decoded.settings.gradient ? 1 : 0}, ${decoded.settings.textColour}, ${decoded.settings.stops.map((stop) => (stop.kind === "theme" ? "t" : stop.color)).join("→")}`
+      : "null";
+    const decodeWith = (code, textColour) => decodeCode(code, { textColour });
+    const fixtureResults = {
+      gpbVoid: [shape(decodeWith(FIXTURES.gpbVoid, "white")), "gpb: g 1, white, #8372fd→#5a82ff→#8372fd"],
+      gpbVoidAuto: [shape(decodeWith(FIXTURES.gpbVoid, "auto")), "gpb: g 1, auto, #8372fd→#5a82ff→#8372fd"],
+      gpbThemeAnchored: [shape(decodeWith(FIXTURES.gpbThemeAnchored, "default")), "gpb: g 1, default, t→#ff5f6d"],
+      gcbVoidAuto: [shape(decodeWith(FIXTURES.gcbVoidAuto, "black")), "gcb: g 1, auto, #8372fd→#5a82ff→#8372fd"],
+      gcbThemeWhite: [shape(decodeWith(FIXTURES.gcbThemeWhite, "black")), "gcb: g 1, white, t→#ff5f6d"],
+      gcbSolidThemeDefault: [shape(decodeWith(FIXTURES.gcbSolidThemeDefault, "black")), "gcb: g 0, default, t"],
+    };
+    const wrongFixtures = Object.entries(fixtureResults).filter(([, [got, want]]) => got !== want);
+    check(36, "Fixtures decode as specified: gpb1: keeps the current text colour (Spread dropped), gcb1: brings its own",
+      !wrongFixtures.length, wrongFixtures.map(([k, [got, want]]) => `${k}: ${got} (expected ${want})`).join("; ") || `${Object.keys(fixtureResults).length} decodes`);
+    const voidAuto = encodeCode(presetSettings(BUILT_IN_PRESETS[0], { textColour: "auto" }));
+    const reEncoded = ["gcbThemeWhite", "gcbSolidThemeDefault"].map((k) => encodeCode(decodeCode(FIXTURES[k]).settings) === FIXTURES[k]);
+    check(36, "Export of the Void built-in with Auto gives exactly the gcb1: Void fixture; the other gcb1: fixtures re-encode to themselves",
+      voidAuto === FIXTURES.gcbVoidAuto && reEncoded.every(Boolean), `${voidAuto}; re-encoded ${reEncoded.join(", ")}`);
+    const codeCases = TEXT_MODES.flatMap((textColour) => [true, false].map((gradient) =>
+      ({ version: SCHEMA_VERSION, gradient, textColour, stops: [theme("a"), custom("b", RED), custom("c", "#00ff7f")] })));
+    const roundTrips = codeCases.map((c) => {
+      const back = decodeCode(encodeCode(c));
+      return !!back && back.from === "gcb" && sameSettings(back.settings, c) && back.settings.stops.map((stop) => stop.id).join() === "s1,s2,s3";
+    });
+    check(36, "gcb1: round-trip: theme and custom stops, every text colour, gradient on and off (ids s1…sN)",
+      roundTrips.every(Boolean) && voidAuto.startsWith(CODE_PREFIX), `${roundTrips.filter(Boolean).length}/${roundTrips.length}`);
+    const raw = (prefix, data) => prefix + toBase64Url(data);
+    const validBody = FIXTURES.gcbVoidAuto.slice(CODE_PREFIX.length);
+    const invalidCodes = {
+      garbage: "garbage",
+      empty: "",
+      "wrong prefix": `gcb2:${validBody}`,
+      "prefix only": CODE_PREFIX,
+      "not base64": `${CODE_PREFIX}@@@`,
+      "9 stops": raw(CODE_PREFIX, { g: 1, x: "a", s: Array(9).fill("ff0000") }),
+      "bad hex": raw(CODE_PREFIX, { g: 1, x: "a", s: ["zzzzzz"] }),
+      "short hex": raw(CODE_PREFIX, { g: 1, x: "a", s: ["fff"] }),
+      "unknown x": raw(CODE_PREFIX, { g: 1, x: "q", s: ["ff0000"] }),
+      "no x": raw(CODE_PREFIX, { g: 1, s: ["ff0000"] }),
+      "g 2": raw(CODE_PREFIX, { g: 2, x: "a", s: ["ff0000"] }),
+      "gpb1: unknown m": raw(GPB_CODE_PREFIX, { g: 1, m: "x", s: ["ff0000"] }),
+      "gpb1: no m": raw(GPB_CODE_PREFIX, { g: 1, s: ["ff0000"] }),
+      "gpb1: x instead of m": raw(GPB_CODE_PREFIX, { g: 1, x: "a", s: ["ff0000"] }),
+      "gpb1: 9 stops": raw(GPB_CODE_PREFIX, { g: 1, m: "c", s: Array(9).fill("ff0000") }),
+      "gpb2:": `gpb2:${FIXTURES.gpbVoid.slice(5)}`,
+    };
+    const accepted = Object.entries(invalidCodes).filter(([, code]) => decodeCode(code) !== null).map(([label]) => label);
+    check(36, "Invalid codes are rejected: garbage, wrong prefixes, 9 stops, bad hex, an unknown x, a gpb1: code GPB itself wouldn't accept",
+      !accepted.length, accepted.length ? `accepted: ${accepted.join(", ")}` : `${Object.keys(invalidCodes).length} rejected`);
+    check(36, "Whitespace around a code is accepted", !!decodeCode(`  \n${FIXTURES.gcbThemeWhite}\t `) && !!decodeCode(` ${FIXTURES.gpbVoid} `), "");
+
+    // The Presets row in the open modal.
+    renderChips(m);
+    const chipIds = () => [...m.chips.querySelectorAll(".gcb-chip")].filter((el) => !el.hidden)
+      .map((el) => (el === m.saveChip ? "save" : el.dataset.preset)).join();
+    const chipOf = (id) => chipEl(id);
+    const pressed = () => [...m.chips.querySelectorAll('.gcb-preset-chip[aria-pressed="true"]')].map((el) => el.dataset.preset).join() || "none";
+    const undoState = () => `undo "${m.undoText.textContent}"${m.undoButton.hidden ? " (no button)" : " + Undo"}`;
+    const undoShows = (message) => m.undoText.textContent === `${message} · ` && !m.undoButton.hidden &&
+      m.undoLine.getAttribute("aria-live") === "polite";
+    const presetsRect = m.presets.getBoundingClientRect();
+    const toolsRect = m.presetsRow.querySelector(".gcb-presets-tools").getBoundingClientRect();
+    const labelRect0 = m.presetsRow.querySelector(".gcb-label").getBoundingClientRect();
+    const unreachableChips = [...m.chips.querySelectorAll(".gcb-chip"), m.exportButton, m.importButton].filter((el) => !reachable(el));
+    check(29, "Presets row between the Text colour row and the preview: label left, Export and Import right, every chip reachable",
+      m.presets.previousElementSibling === m.text && m.presets.nextElementSibling === m.preview &&
+        Math.abs(labelRect0.left - presetsRect.left) <= 1 && Math.abs(toolsRect.right - presetsRect.right) <= 1 && !unreachableChips.length,
+      `after .${m.presets.previousElementSibling?.className}, before .${m.presets.nextElementSibling?.className}` +
+        (unreachableChips.length ? `; not reachable: ${unreachableChips.map((el) => el.textContent).join(", ")}` : ""));
+    const shareButtons = [[m.exportButton, "Export", EXPORT_TITLE], [m.importButton, "Import", IMPORT_TITLE]];
+    const shareProblems = shareButtons.flatMap(([el, label, title]) => {
+      const cs = getComputedStyle(el);
+      const svg = el.querySelector("svg");
+      const problems = [];
+      if (!(parseFloat(cs.borderTopWidth) >= 1) || cs.borderTopStyle !== "solid") problems.push(`${label}: border ${cs.borderTopWidth} ${cs.borderTopStyle}`);
+      if (!svg || el.firstElementChild !== svg || Math.abs(svg.getBoundingClientRect().width - 14) > 0.5) problems.push(`${label}: icon`);
+      const shownLabel = el.querySelector(".gcb-share-label")?.textContent;
+      if (shownLabel !== label || el.title !== title) problems.push(`${label}: label "${shownLabel}", title "${el.title}"`);
+      if (parseInt(cs.fontWeight, 10) < 700 || cs.borderTopLeftRadius === "0px") problems.push(`${label}: weight ${cs.fontWeight}, radius ${cs.borderTopLeftRadius}`);
+      return problems;
+    });
+    check(36, "Export and Import are outlined pills with a 14 px icon first, bold labels and their titles", !shareProblems.length,
+      shareProblems.join("; ") || "both fine");
+    const chipSwatch = chipOf("b:aurora")?.querySelector(".gcb-chip-swatch");
+    const swatchRect = chipSwatch?.getBoundingClientRect();
+    const rowIds = (row) => [...row.querySelectorAll(".gcb-chip")].filter((el) => !el.hidden)
+      .map((el) => (el === m.saveChip ? "save" : el.dataset.preset)).join();
+    const rowsSplit = (ownIds) => rowIds(m.builtInRow) === BUILT_IN_PRESETS.map((p) => p.id).join() && rowIds(m.ownRow) === [...ownIds, "save"].join();
+    const rowGap = m.ownRow.getBoundingClientRect().top - m.builtInRow.getBoundingClientRect().bottom;
+    check(29, "Chips: two rows (the built-ins; own presets and + Save), 8 px apart, 12 px swatches painted with barImage()",
+      chipIds() === "b:void,b:sunset,b:aurora,b:neon,b:fairy,save" && rowsSplit([]) && Math.abs(rowGap - 8) <= 1 &&
+        swatchRect && Math.abs(swatchRect.width - 12) <= 0.5 && chipSwatch.style.backgroundImage.startsWith("linear-gradient"),
+      `${chipIds()}; gap ${rowGap.toFixed(1)} px; swatch ${swatchRect?.width.toFixed(1)} px`);
+
+    // Two-step apply with a preview in the strip, text colour included.
+    setTestSettings(true, [custom("s1", BLACK)], "auto");
+    setTestSettings(false, [custom("s1", BLACK)], "auto");
+    const notAPreset = JSON.stringify(settings);
+    const cssBeforePreview = styleText();
+    const stripProbe = document.createElement("span"); // the same serialisation as the strip's inline style
+    const stripShows = (sets) => {
+      stripProbe.style.backgroundImage = barImage(sets);
+      return m.preview.style.backgroundImage === stripProbe.style.backgroundImage;
+    };
+    const stripText = () => toHex(getComputedStyle(m.previewLabel).color);
+    const statusText = () => m.undoText.textContent;
+    const previewMessage = (name) => `Previewing "${name}" — click it again to apply, Esc to cancel`;
+    const untouched = () => JSON.stringify(settings) === notAPreset && styleText() === cssBeforePreview;
+    const fairy = chipOf("b:fairy");
+    const fairyLabel = () => fairy.querySelector(".gcb-chip-label").textContent;
+    const idleChipWidth = fairy.getBoundingClientRect().width;
+    const textBefore = stripText();
+    realClick(fairy);
+    const fairyText = textColourFor(presetSettings(BUILT_IN_PRESETS[4]));
+    check(29, "First click arms a chip ('Apply?', same width) and previews it in the strip, its text colour too (Auto computed for its colours); nothing applied",
+      fairy.classList.contains("gcb-armed") && fairyLabel() === APPLY_LABEL && Math.abs(fairy.getBoundingClientRect().width - idleChipWidth) <= 1 &&
+        stripShows(presetSettings(BUILT_IN_PRESETS[4])) && stripText() === fairyText && textBefore === WHITE && fairyText === BLACK && untouched() &&
+        statusText() === previewMessage("Fairy") && m.undoButton.hidden,
+      `label "${fairyLabel()}", strip text ${textBefore} → ${stripText()} (Fairy with Auto: ${fairyText}), status "${statusText()}"`);
+    stillOpen("arming a preset chip");
+    press(fairy, "Escape");
+    check(29, "Escape disarms: the strip (colours and text) shows the current settings again, the status line is empty, nothing applied",
+      !fairy.classList.contains("gcb-armed") && fairyLabel() === "Fairy" && stripShows(settings) && stripText() === WHITE && !statusText() && untouched(),
+      `label "${fairyLabel()}", strip text ${stripText()}, status "${statusText()}"`);
+    realClick(fairy);
+    await sleep(RESET_CONFIRM_MS + 500);
+    const stillArmed = fairy.classList.contains("gcb-armed") && stripShows(presetSettings(BUILT_IN_PRESETS[4]));
+    const aurora = chipOf("b:aurora");
+    realClick(aurora);
+    check(29, "No timeout while previewing; a click on another chip moves the arm and the preview to it",
+      stillArmed && !fairy.classList.contains("gcb-armed") && aurora.classList.contains("gcb-armed") &&
+        stripShows(presetSettings(BUILT_IN_PRESETS[2])) && statusText() === previewMessage("Aurora") && untouched(),
+      `still armed after ${(RESET_CONFIRM_MS + 500) / 1000} s ${stillArmed}; armed ${m.armed?.chip.dataset.preset}`);
+    realClick(dots()[0]);
+    check(29, "A click elsewhere disarms: the strip reverts, the status line clears, nothing applied",
+      !aurora.classList.contains("gcb-armed") && !m.armed && stripShows(settings) && !statusText() && untouched(), `status "${statusText()}"`);
+    stillOpen("a click outside an armed chip");
+
+    setTestSettings(true, [custom("s1", RED), custom("s2", GREEN)], "white");
+    realClick(fairy);
+    realClick(fairy);
+    check(29, "Second click applies Fairy: its colours, gradient on, the text colour kept (White), the first dot selected; same chip node",
+      sameSettings(settings, presetSettings(BUILT_IN_PRESETS[4])) && settings.textColour === "white" && styleText().includes("--text-base: #ffffff;") &&
+        selectionIs(settings.stops[0].id) && chipOf("b:fairy") === fairy && fairy.isConnected && stripShows(settings),
+      `${settings.textColour}, ${settings.stops.map((x) => x.color).join(", ")}; ${selection()}`);
+    stillOpen("applying a preset");
+    const fairyBorder = parseRgb(getComputedStyle(fairy).borderTopColor);
+    const buttonColour = computedRgb(m.root, "var(--spice-button)");
+    check(29, "The active chip is marked (aria-pressed, --spice-button border); a built-in matches by colours only, whatever the text colour",
+      pressed() === "b:fairy" && !!fairyBorder && !!buttonColour && fairyBorder.every((v, i) => Math.abs(v - buttonColour[i]) <= 1) &&
+        matchesPreset(BUILT_IN_PRESETS[4], { ...settings, textColour: "black" }),
+      `pressed ${pressed()}, border ${getComputedStyle(fairy).borderTopColor}`);
+    check(29, "Undo line after applying: 'Applied \"Fairy\" · Undo' in a polite live region", undoShows('Applied "Fairy"'), undoState());
+    const fairyApplied = JSON.stringify(settings);
+    realClick(fairy);
+    check(29, "A click on the active chip does nothing: not armed, nothing applied, the Undo kept",
+      !fairy.classList.contains("gcb-armed") && !m.armed && JSON.stringify(settings) === fairyApplied && undoShows('Applied "Fairy"'),
+      `armed ${!!m.armed}, ${undoState()}`);
+    const sunset = chipOf("b:sunset");
+    realClick(sunset);
+    realClick(sunset);
+    const sunsetApplied = sameSettings(settings, presetSettings(BUILT_IN_PRESETS[1])) && pressed() === "b:sunset";
+    realClick(m.undoButton);
+    check(29, "A new action replaces the pending undo: Undo goes back to Fairy, not further",
+      sunsetApplied && sameSettings(settings, presetSettings(BUILT_IN_PRESETS[4])) && m.undoButton.hidden && !m.undoText.textContent,
+      `${settings.stops.map((x) => x.color).join(", ")}; ${undoState()}`);
+    setTestSettings(true, [theme("s1"), custom("s2", RED), custom("s3", GREEN)], "black");
+    selectStop("s3");
+    const exact = JSON.stringify(settings);
+    realClick(fairy);
+    realClick(fairy);
+    realClick(m.undoButton);
+    check(29, "Undo after applying restores exactly the previous settings (ids and text colour included), the selection on the first dot",
+      JSON.stringify(settings) === exact && selectionIs("s1"), `${JSON.stringify(settings)}; ${selection()}`);
+    stillOpen("Undo after applying");
+    realClick(chipOf("b:neon"));
+    realClick(chipOf("b:neon"));
+    setStopColour(settings.stops[0].id, BLUE);
+    check(29, "Editing the colours afterwards drops the pending undo", m.undoButton.hidden && !pendingUndo, undoState());
+
+    // + Save, the inline name field, own presets: they save and restore the text colour.
+    setTestSettings(true, [theme("s1"), custom("s2", RED)], "default");
+    const saveNode = m.saveChip;
+    realClick(saveNode);
+    const nameShown = !m.nameField.hidden && m.saveChip.hidden && document.activeElement === m.nameField && m.nameField.value === "Preset 1" &&
+      !m.nameField.closest(".gcb-popover") && saveNode.isConnected;
+    press(m.nameField, "Escape");
+    const cancelled = !presets.length && m.nameField.hidden && !m.saveChip.hidden && document.activeElement === m.saveChip;
+    realClick(m.saveChip);
+    m.nameField.value = "  Mine  ";
+    press(m.nameField, "Enter");
+    await tick();
+    await tick();
+    const mineId = presets[0]?.id;
+    const mineChip = mineId && chipOf(mineId);
+    check(29, "+ Save: an inline name field ('Preset 1'); Escape cancels; Enter saves 'Mine' with the text colour, its chip in row 2, active and focused",
+      nameShown && cancelled && presets.length === 1 && presets[0].name === "Mine" && presets[0].settings.textColour === "default" &&
+        JSON.parse(Spicetify.LocalStorage.get(PRESETS_KEY) ?? "{}").presets?.[0]?.settings.textColour === "default" &&
+        rowsSplit([mineId]) && mineChip?.getAttribute("aria-pressed") === "true" && document.activeElement === mineChip && m.saveChip === saveNode,
+      `field ${nameShown}, cancelled ${cancelled}; ${chipIds()}; pressed ${pressed()}`);
+    stillOpen("saving a preset");
+    setTestSettings(true, [custom("s1", GREEN), custom("s2", BLUE)], "white");
+    check(29, "An own preset doesn't match other settings that differ only in the text colour",
+      !matchesPreset(presets[0], { ...presetSettings(presets[0]), textColour: "white" }) && pressed() === "none", `pressed ${pressed()}`);
+    realClick(chipOf(mineId));
+    const ownText = stripText();
+    realClick(chipOf(mineId));
+    check(29, "An own preset previews and restores everything: gradient, stops (theme stays theme) and its text colour (Spotify default)",
+      ownText === spotifyTextColour() && sameSettings(settings, { gradient: true, textColour: "default", stops: [theme("x"), custom("y", RED)] }) &&
+        !styleText().includes("--text-base"),
+      `preview text ${ownText}; ${JSON.stringify(settings)}`);
+    stillOpen("applying an own preset");
+
+    rightClick(chipOf("b:fairy"));
+    const builtInMenu = menuShown();
+    closePopover();
+    rightClick(chipOf(mineId));
+    const shownItems = [...m.menu.querySelectorAll(".gcb-menu-item")].filter((el) => !el.hidden).map((el) => el.textContent);
+    const renameNode = m.renameItem;
+    realClick(renameNode);
+    const renaming = !m.nameField.hidden && m.nameField.value === "Mine" && chipOf(mineId)?.hidden && renameNode.isConnected && !menuShown();
+    m.nameField.value = "Fairy";
+    press(m.nameField, "Enter");
+    await tick();
+    await tick();
+    check(29, "Own chips have Rename, Update to current colours, Delete (built-ins no menu); Rename in place, a clash with a built-in gets ' (2)'",
+      !builtInMenu && shownItems.join() === "Rename,Update to current colours,Delete" && renaming && presets[0].name === "Fairy (2)" &&
+        chipOf(mineId)?.textContent.includes("Fairy (2)"),
+      `built-in menu ${builtInMenu}; items ${shownItems.join(", ")}; name "${presets[0].name}"`);
+    setTestSettings(true, [custom("s1", RED), custom("s2", GREEN), custom("s3", BLUE)], "black");
+    rightClick(chipOf(mineId));
+    realClick(m.updatePresetItem);
+    await tick();
+    await tick();
+    check(29, "Update to current colours stores the current settings (text colour included); its chip turns active",
+      sameSettings(presetSettings(presets[0]), settings) && presets[0].settings.textColour === "black" && chipOf(mineId)?.getAttribute("aria-pressed") === "true",
+      `pressed ${pressed()}`);
+    addPreset("Second");
+    renderChips(m);
+    const beforeDelete = JSON.stringify(presets);
+    rightClick(chipOf(mineId));
+    const deleteNode = m.deletePresetItem;
+    realClick(deleteNode);
+    await tick();
+    await tick();
+    const deleted = presets.length === 1 && !chipOf(mineId) && undoShows('Deleted "Fairy (2)"') && deleteNode.isConnected;
+    realClick(m.undoButton);
+    await tick();
+    await tick();
+    check(29, "Delete at once with 'Deleted \"…\" · Undo'; Undo restores the preset in its old place, in storage too",
+      deleted && JSON.stringify(presets) === beforeDelete && Spicetify.LocalStorage.get(PRESETS_KEY) === presetsJson(JSON.parse(beforeDelete)),
+      `deleted ${deleted}; ${names(presets)}`);
+    stillOpen("deleting a preset");
+    while (presets.length < MAX_PRESETS) addPreset("Fill");
+    renderChips(m);
+    check(29, `+ Save is disabled at ${MAX_PRESETS} presets ('Up to ${MAX_PRESETS} presets'); a ${MAX_PRESETS + 1}th isn't added`,
+      m.saveChip.disabled && m.saveChip.title === SAVE_FULL_LABEL && addPreset("One more") === null && presets.length === MAX_PRESETS,
+      `${presets.length} presets, disabled ${m.saveChip.disabled}`);
+    presets = [];
+    savePresets();
+    renderChips(m);
+
+    // Import: gcb1: brings its text colour, gpb1: keeps the current one.
+    setTestSettings(true, [custom("s1", RED), custom("s2", GREEN)], "black");
+    const beforeImport = JSON.stringify(settings);
+    realClick(m.importButton);
+    const importOpen = !m.importPanel.hidden && m.importButton.getAttribute("aria-expanded") === "true" && document.activeElement === m.codeInput;
+    m.codeInput.value = "gcb1:not-a-code";
+    const applyNode = m.importApply;
+    realClick(applyNode);
+    check(36, "Import: an invalid code is flagged (aria-invalid, 'Not a valid code') and changes nothing",
+      importOpen && m.codeInput.getAttribute("aria-invalid") === "true" && m.importError.textContent === IMPORT_ERROR &&
+        JSON.stringify(settings) === beforeImport, `panel ${importOpen}, error "${m.importError.textContent}"`);
+    const typeCode = (value) => {
+      m.codeInput.value = value;
+      m.codeInput.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const cssBeforeImport = styleText();
+    typeCode(`  ${FIXTURES.gcbThemeWhite}  `);
+    const gcbPreview = stripShows(decodeCode(FIXTURES.gcbThemeWhite).settings) && stripText() === WHITE && statusText() === PREVIEW_CODE_MESSAGE &&
+      JSON.stringify(settings) === beforeImport && styleText() === cssBeforeImport;
+    typeCode(FIXTURES.gpbVoid);
+    const gpbPreview = stripShows(decodeCode(FIXTURES.gpbVoid).settings) && stripText() === BLACK && JSON.stringify(settings) === beforeImport;
+    typeCode("");
+    const clearedReverts = stripShows(settings) && !statusText();
+    check(36, "A valid code in the Import field previews in the strip, text colour included (gcb1: White; gpb1: the current Black); clearing reverts",
+      gcbPreview && gpbPreview && clearedReverts, `gcb1 ${gcbPreview}, gpb1 ${gpbPreview}, cleared ${clearedReverts}`);
+    typeCode(FIXTURES.gcbThemeWhite);
+    realClick(applyNode);
+    const gcbApplied = sameSettings(settings, decodeCode(FIXTURES.gcbThemeWhite).settings) && settings.textColour === "white" &&
+      m.importPanel.hidden && undoShows("Imported code") && applyNode.isConnected;
+    realClick(m.undoButton);
+    const undone = JSON.stringify(settings) === beforeImport;
+    check(36, "Import gcb1: applies its colours and its text colour (White), 'Imported code · Undo'; Undo restores exactly",
+      gcbApplied && undone, `applied ${gcbApplied}, undone ${undone}; ${undoState()}`);
+    realClick(m.importButton);
+    typeCode(FIXTURES.gpbThemeAnchored);
+    press(m.codeInput, "Enter");
+    check(36, "Import gpb1: (GPB's code) applies its colours, keeps the current text colour (Black), 'Imported code from Gradient Progress Bar · Undo'",
+      settings.gradient && settings.stops.map((x) => (x.kind === "theme" ? "t" : x.color)).join() === "t,#ff5f6d" && settings.textColour === "black" &&
+        undoShows("Imported code from Gradient Progress Bar") && !("mode" in settings),
+      `${JSON.stringify(settings)}; ${undoState()}`);
+    stillOpen("importing a code");
+    realClick(m.undoButton);
+
+    // Export: writeClipboard()'s tiers in order with stubbed sources, then the real ones.
+    const realSources = { ...clipboardSources };
+    const exportWidth = () => m.exportButton.getBoundingClientRect().width;
+    const idleExportWidth = exportWidth();
+    const showsCopied = () => m.exportLabel.textContent === COPIED_LABEL && m.exportIcon.hasAttribute("hidden") && !m.exportCheck.hasAttribute("hidden") &&
+      Math.abs(exportWidth() - idleExportWidth) <= 1;
+    const showsExport = () => m.exportLabel.textContent === EXPORT_LABEL && !m.exportIcon.hasAttribute("hidden") && m.exportCheck.hasAttribute("hidden");
+    let captured = null;
+    const tierLog = [];
+    const stubClipboard = ({ apiTier, write, exec }) => {
+      tierLog.length = 0;
+      captured = null;
+      clipboardSources.api = () => apiTier && { copy: async (text) => {
+        tierLog.push("ClipboardAPI");
+        if (apiTier !== "ok") throw new Error("stub");
+        captured = text;
+      } };
+      clipboardSources.clipboard = () => write && { writeText: async (text) => {
+        tierLog.push("writeText");
+        if (write !== "ok") throw new Error("stub");
+        captured = text;
+      } };
+      clipboardSources.execCommand = (command) => {
+        tierLog.push("execCommand");
+        if (exec !== "ok" || command !== "copy") return false;
+        captured = document.activeElement?.value ?? null;
+        return true;
+      };
+    };
+    try {
+      setTestSettings(true, BUILT_IN_PRESETS[0].colours.map((c, i) => custom(`s${i + 1}`, c)), "auto");
+      stubClipboard({ apiTier: "ok", write: "ok", exec: "ok" });
+      const viaApi = await copyCode(m);
+      check(36, "Export copies the gcb1: code through Spicetify's ClipboardAPI first (Void + Auto = the fixture); the button reads 'Copied' with the check, same width",
+        viaApi === "ClipboardAPI" && tierLog.join() === "ClipboardAPI" && captured === FIXTURES.gcbVoidAuto && showsCopied() &&
+          m.announce.textContent === "Share code copied" && m.codeFallback.hidden,
+        `tiers ${tierLog.join(" → ")}; copied ${captured}`);
+      await sleep(COPIED_MS + 200);
+      const backToExport = showsExport();
+      stubClipboard({ apiTier: "fail", write: "fail", exec: "ok" });
+      const viaExec = await copyCode(m);
+      stubClipboard({ apiTier: "fail", write: "fail", exec: "fail" });
+      realClick(m.exportButton);
+      await sleep(50);
+      check(36, `Export: 'Export' again after ${COPIED_MS / 1000} s; execCommand when both async tiers fail; the selected code field when all three fail`,
+        backToExport && viaExec === "execCommand" && tierLog.join() === "ClipboardAPI,writeText,execCommand" && !m.codeFallback.hidden &&
+          m.codeOutput.value === FIXTURES.gcbVoidAuto && document.activeElement === m.codeOutput && showsExport(),
+        `back ${backToExport}, exec ${viaExec}, fallback shown ${!m.codeFallback.hidden}`);
+      stillOpen("Export");
+    } finally {
+      Object.assign(clipboardSources, realSources);
+    }
+    m.codeFallback.hidden = true;
+
     // ── Preview strip (#7) ──
     setTestSettings(true, [theme("s1"), custom("s2", GREEN), custom("s3", RED)]);
     await sleep(50);
@@ -2589,9 +3944,9 @@
     const pcs = getComputedStyle(pv);
     const labelRect = m.previewLabel.getBoundingClientRect();
     const iconRect = m.previewIcon.getBoundingClientRect();
-    check(7, "Preview strip: 24 px high, 4 px radius, between the Text colour row and the dots",
+    check(7, "Preview strip: 24 px high, 4 px radius, between the Presets row and the dots",
       Math.abs(pr.height - 24) <= 0.5 && pcs.borderTopLeftRadius === "4px" && pcs.borderBottomRightRadius === "4px" &&
-        m.text.nextElementSibling === pv && pv.nextElementSibling === m.dotsLine,
+        m.presets.nextElementSibling === pv && pv.nextElementSibling === m.dotsLine,
       `${pr.width.toFixed(1)}×${pr.height.toFixed(1)}, radius ${pcs.borderRadius}`);
     check(7, "Preview strip: the bar's gradient over the bar's own colour",
       pcs.backgroundImage === computedImage(barImage(settings)) && toHex(pcs.backgroundColor) === barBase(),
@@ -2737,7 +4092,11 @@
       error: startup.error,
       spotify: window.Spicetify?.Platform?.version ?? null,
       spicetify: spicetifyVersion(),
-      apis: Object.fromEntries(["LocalStorage", "PopupModal", "Player"].map((n) => [n, !!api(n)])),
+      apis: Object.fromEntries(["LocalStorage", "PopupModal", "Player", "Menu", "Topbar", "ReactJSX"].map((n) => [n, !!api(n)])),
+      entryErrors: startup.entryErrors,
+      menu: { registered: menuRegistered, menuItemUsable: menuItemUsable() },
+      topbar: { created: !!shared?.button, connected: !!shared?.button?.element?.isConnected },
+      shared: shared?.status() ?? null,
       // While start-up waits for Spicetify, the text colour's state isn't initialised yet.
       textColour: startup.phase === "waiting for Spicetify" ? null : textStatus(),
       page: location.href,
@@ -2766,10 +4125,308 @@
 
   // ── Start-up ────────────────────────────────────────────────────────────────
 
+  const ENTRY_LABEL = "Gradient Connect Bar";
+  // GPB's entry icon, byte for byte (#34): a brush over a progress bar. Monochrome (currentColor
+  // follows the theme and hover), 16 × 16, no <defs> and no ids. The shared top-bar button looks
+  // the same whichever extension owns it, and both profile-menu entries use it too.
+  const ENTRY_ICON =
+    '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M14.6 1.4a1.3 1.3 0 0 0-1.85 0L7.6 6.55l1.85 1.85 5.15-5.15a1.3 1.3 0 0 0 0-1.85zM6.7 7.5c-1.3 0-2.2 1-2.2 2.3 0 .5-.3.9-.9 1.1 1.5.9 4.3.7 4.9-1.3.1-.4.1-.7 0-1z"/><rect x="0.5" y="12.5" width="15" height="2.5" rx="1.25" opacity=".35"/><rect x="0.5" y="12.5" width="9" height="2.5" rx="1.25"/></svg>';
+
+  // The settings, from anywhere: the top bar, the profile menu, __gcb.openSettings().
+  function openSettings() {
+    return modal || openModal();
+  }
+
+  // ── Shared entry (protocol 1) — keep identical in GCB and GPB ──
+  // Gradient Connect Bar and Gradient Progress Bar share one top-bar button. Whichever starts
+  // first creates window.__gradientBars (it's the owner) and the only button; the other registers
+  // its entry. One entry: the button opens it directly. Two: a small menu with both. Each
+  // extension keeps its own right-click and profile-menu entries; the only call across is
+  // entries[i].open. This block depends on nothing but SELF, ENTRY_ICON and window.Spicetify.
+  // joinGradientBars() takes overrides for a separate test instance (key, prefix, createButton);
+  // the live registry uses the defaults.
+  const SELF = { id: "gcb", name: "Gradient Connect Bar", open: openSettings };
+
+  function joinGradientBars({ self = SELF, key = "__gradientBars", prefix = "gradient-bars", createButton = null } = {}) {
+    const PROTOCOL = 1;
+    const MULTI_LABEL = "Gradient bars";
+    const GAP = 8; // menu below the button, and its distance from the window edges
+    const makeButton = createButton ?? ((label, icon, onClick) => new window.Spicetify.Topbar.Button(label, icon, onClick));
+    let button = null;
+    let hideMenu = () => {};
+    const errors = [];
+
+    // The registry: created by the first extension, a synchronous check-and-set, so two that
+    // start close together can't both become owner. Its shape is frozen for protocol 1.
+    function ownerRegistry() {
+      let menu = null;
+      let anchor = null;
+      let detach = null; // removes the open menu's listeners
+      const items = () => [...menu.querySelectorAll(`.${prefix}-item`)];
+      const reg = {
+        protocol: PROTOCOL,
+        owner: self.id,
+        entries: [],
+        // Adds, or replaces by id; sorted by name.
+        register(entry) {
+          const i = reg.entries.findIndex((e) => e.id === entry.id);
+          if (i === -1) reg.entries.push(entry);
+          else reg.entries[i] = entry;
+          reg.entries.sort((a, b) => a.name.localeCompare(b.name));
+          reg.refresh();
+        },
+        refresh() {
+          if (button) button.label = reg.entries.length === 1 ? reg.entries[0].name : MULTI_LABEL;
+        },
+        // One entry: open it. Two or more: toggle the menu. Entries are read at click time.
+        click(at) {
+          if (reg.entries.length === 1) return reg.entries[0].open();
+          if (menu && !menu.hidden) return hide();
+          // Keyboard activation clicks with detail 0 (or isn't a click at all).
+          const e = window.event;
+          show(at, e ? e.type !== "click" || e.detail === 0 : !!at?.matches?.(":focus-visible"));
+        },
+      };
+
+      // One element, appended once, hidden and shown, never removed while the page lives.
+      function build() {
+        menu = document.getElementById(`${prefix}-menu`);
+        if (menu) return;
+        menu = document.createElement("div");
+        menu.id = `${prefix}-menu`;
+        menu.setAttribute("role", "menu");
+        menu.setAttribute("aria-label", MULTI_LABEL);
+        menu.hidden = true;
+        menu.innerHTML = `<style>
+#${prefix}-menu { position: fixed; z-index: 9999; display: flex; flex-direction: column; box-sizing: border-box; min-width: 180px; padding: 4px; border-radius: 8px; background-color: var(--spice-card, var(--spice-main)); color: var(--spice-text); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+#${prefix}-menu[hidden] { display: none; }
+.${prefix}-item { padding: 8px 12px; border: 0; border-radius: 4px; background: none; color: inherit; font: inherit; font-size: .875rem; text-align: left; white-space: nowrap; cursor: pointer; }
+.${prefix}-item:hover, .${prefix}-item:focus-visible { outline: none; background-color: color-mix(in srgb, var(--spice-button) 20%, transparent); }
+</style>`;
+        menu.addEventListener("keydown", (e) => {
+          const list = items();
+          const i = list.indexOf(document.activeElement);
+          const next = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: list.length - 1 }[e.key];
+          if (next !== undefined) {
+            e.preventDefault();
+            list[(next + list.length) % list.length]?.focus();
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            if (i !== -1) activate(i);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            hide({ refocus: true });
+          } else if (e.key === "Tab") hide();
+        });
+        menu.addEventListener("click", (e) => {
+          const item = e.target.closest(`.${prefix}-item`);
+          if (item) activate(items().indexOf(item));
+        });
+        document.body.append(menu);
+      }
+
+      // The items are rebuilt on opening only, never during a click on one of them.
+      function show(at, keyboard) {
+        build();
+        for (const item of items()) item.remove();
+        for (const entry of reg.entries) {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = `${prefix}-item`;
+          item.setAttribute("role", "menuitem");
+          item.dataset.entry = entry.id;
+          item.textContent = entry.name;
+          menu.append(item);
+        }
+        anchor = at ?? null;
+        menu.hidden = false;
+        place();
+        const outside = (e) => !menu.contains(e.target) && !anchor?.contains(e.target) && hide();
+        const close = () => hide();
+        document.addEventListener("pointerdown", outside, true);
+        document.addEventListener("scroll", close, true);
+        window.addEventListener("blur", close);
+        window.addEventListener("resize", close);
+        detach = () => {
+          document.removeEventListener("pointerdown", outside, true);
+          document.removeEventListener("scroll", close, true);
+          window.removeEventListener("blur", close);
+          window.removeEventListener("resize", close);
+        };
+        if (keyboard) items()[0]?.focus({ preventScroll: true });
+      }
+
+      // 8 px below the button, right edges aligned, clamped into the window.
+      function place() {
+        const r = anchor?.getBoundingClientRect() ?? { right: innerWidth - GAP, bottom: GAP };
+        const { width, height } = menu.getBoundingClientRect();
+        const left = Math.min(Math.max(r.right - width, GAP), Math.max(GAP, innerWidth - GAP - width));
+        const top = Math.min(Math.max(r.bottom + GAP, GAP), Math.max(GAP, innerHeight - GAP - height));
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+      }
+
+      function hide({ refocus = false } = {}) {
+        if (!menu || menu.hidden) return;
+        menu.hidden = true;
+        detach?.();
+        detach = null;
+        if (refocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
+      }
+      hideMenu = hide;
+
+      // Hidden first, then opened in the next task: the clicked item stays connected.
+      function activate(i) {
+        const entry = reg.entries[i];
+        hide();
+        if (entry) setTimeout(() => entry.open(), 0);
+      }
+
+      return reg;
+    }
+
+    const found = window[key];
+    let registry = null;
+    let role;
+    if (found?.protocol === PROTOCOL) {
+      registry = found;
+      role = "member";
+    } else if (found) role = `own button (protocol ${found.protocol})`;
+    else {
+      registry = window[key] = ownerRegistry();
+      role = "owner";
+    }
+    registry?.register(self);
+
+    // The owner (or, next to another protocol, each extension) creates one button at most. It
+    // stays registered while it isn't on screen yet: Spicetify mounts it once it finds its top bar.
+    function ensureButton() {
+      if (button || role === "member") return button;
+      if (!createButton && !window.Spicetify?.Topbar?.Button) return null;
+      try {
+        if (registry) {
+          button = makeButton(self.name, ENTRY_ICON, () => registry.click(button?.element));
+          registry.refresh();
+        } else button = makeButton(self.name, ENTRY_ICON, () => self.open());
+      } catch (e) {
+        errors.push(`Topbar: ${e?.message || e}`);
+      }
+      return button;
+    }
+
+    return {
+      role,
+      registry,
+      errors,
+      ensureButton,
+      get button() {
+        return button;
+      },
+      status: () => ({
+        protocol: registry?.protocol ?? found?.protocol ?? PROTOCOL,
+        role,
+        owner: registry?.owner ?? null,
+        entries: registry ? registry.entries.map((e) => e.id) : [self.id],
+      }),
+      // Test instances only: the live menu and registry stay for the page's lifetime.
+      dispose() {
+        hideMenu();
+        document.getElementById(`${prefix}-menu`)?.remove();
+        button?.element?.remove();
+        if (role === "owner" && window[key] === registry) delete window[key];
+      },
+    };
+  }
+  // ── End shared entry ──
+
+  // The states reported by the separate spicetify-fixes extension (window.__fixes), if it runs: its
+  // workarounds for the top bar and MenuItem make ours work too. Read only, never relied on (GPB #55).
+  function otherFixes() {
+    const fixes = window.__fixes?.fixes;
+    return Array.isArray(fixes) ? Object.fromEntries(fixes.map((fix) => [fix?.id, fix?.state])) : null;
+  }
+
+  // Spicetify renders its profile-menu items inside Spotify's legacy menu. On Spotify 1.3.4,
+  // Spicetify.ReactComponent.MenuItem resolves to Spotify's V2-only item, which throws "cannot be
+  // rendered outside a collection" there, so with any Spicetify item registered the profile menu
+  // doesn't open at all (spicetify/cli#4012). The V2-only item's source has "forceV2LeadingIcon"
+  // but not "aria-describedby"; Spotify's layout-switching item, the right one, has both.
+  // Unknown shapes count as usable. Cached per component, since shouldAdd runs on every render.
+  // Ported unchanged from GPB (GPB #27).
+  function menuItemUsable() {
+    const component = api("ReactComponent")?.MenuItem;
+    if (!component || !["function", "object"].includes(typeof component)) return true;
+    if (!menuItemVerdicts.has(component)) {
+      const fn = typeof component === "function" ? component : component.render ?? component.type?.render ?? component.type;
+      let source = "";
+      try {
+        source = Function.prototype.toString.call(fn);
+      } catch {}
+      menuItemVerdicts.set(component, !(source.includes("forceV2LeadingIcon") && !source.includes("aria-describedby")));
+    }
+    return menuItemVerdicts.get(component);
+  }
+
+  // Both Spicetify entries, independently and at the same time, not one as the other's fallback
+  // (GPB #45): the profile menu (#35) and the shared top-bar button (#34). Resolves to a
+  // description of what's registered, or null.
+  async function registerSpicetifyEntries() {
+    const entries = await Promise.all([registerMenuEntry(), registerTopbarEntry()]);
+    return entries.filter(Boolean).join(" + ") || null;
+  }
+
+  // Our own profile-menu entry (#35). Menu.Item's constructor calls Spicetify.ReactJSX.jsx() right
+  // away, and spicetify-bindings set ReactJSX only after CLI extensions have started (GPB #27), so
+  // only this entry waits. Never a MenuItem swap or any other global Spicetify fix: that's
+  // spicetify-fixes' job.
+  async function registerMenuEntry() {
+    if (!api("Menu")?.Item) return null;
+    for (let waited = 0; !window.Spicetify?.ReactJSX?.jsx && waited < 15000; waited += 250) await sleep(250);
+    if (!window.Spicetify?.ReactJSX?.jsx) {
+      startup.entryErrors.push("Menu: Spicetify.ReactJSX not ready after 15 s");
+      return null;
+    }
+    try {
+      const item = new Spicetify.Menu.Item(ENTRY_LABEL, false, openSettings, ENTRY_ICON);
+      // On an affected build our entry must never be what breaks the profile menu. shouldAdd runs
+      // on every render, so the entry appears by itself once MenuItem is fixed.
+      const base = item.shouldAdd;
+      item.shouldAdd = (...a) => menuItemUsable() && base(...a);
+      item.register();
+      window.__gcb.menuItem = item;
+      menuRegistered = true;
+      return menuItemUsable() ? "profile menu" : "profile menu (hidden while Spicetify's MenuItem is broken)";
+    } catch (e) {
+      startup.entryErrors.push(`Menu: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  // The shared top-bar button (#34): a member creates none; the owner (or an extension next to
+  // another protocol) creates one once Spicetify.Topbar exists (waiting up to 15 s for it), and
+  // counts it once it's on screen.
+  async function registerTopbarEntry() {
+    if (shared.role === "member") return `shared top-bar button (owner: ${shared.registry.owner})`;
+    for (let waited = 0; !api("Topbar")?.Button && waited < 15000; waited += 250) await sleep(250);
+    if (!api("Topbar")?.Button) return null;
+    if (!shared.ensureButton()) {
+      startup.entryErrors.push(...shared.errors);
+      return null;
+    }
+    window.__gcb.topbarButton = shared.button;
+    for (let waited = 0; waited < 4000; waited += 250) {
+      if (shared.button.element?.isConnected) return shared.role === "owner" ? "top bar button (shared)" : "top bar button";
+      await sleep(250);
+    }
+    startup.entryErrors.push("Topbar: button created, not on screen yet (Spicetify hasn't found its top bar)");
+    return null;
+  }
+
   // The settings open by right-clicking the Connect bar: one delegated capture-phase listener on
-  // document, so it survives Spotify removing and re-creating the bar. No Spicetify UI wrappers:
-  // Topbar.Button never renders on this build and Menu.register() throws for local extensions.
-  // While the bar isn't there, __gcb.openSettings() opens them.
+  // document, so it survives Spotify removing and re-creating the bar. The bar only exists during
+  // remote playback, so the shared top-bar button (#34), the profile menu (#35) and
+  // __gcb.openSettings() open them too.
   function enableBarContextMenu() {
     document.addEventListener(
       "contextmenu",
@@ -2787,13 +4444,19 @@
   let settings;
   try {
     settings = loadSettings();
+    presets = loadPresets(); // #29
     window.addEventListener("beforeunload", flushSettings);
     recalcTextColour(); // applies the stylesheet, text colour included, so there's no flash of the old one
     watchTextTriggers();
-    window.__gcb = { version: VERSION, status: () => statusReport(), selfTest, openSettings: () => modal || openModal() };
+    window.__gcb = { version: VERSION, status: () => statusReport(), selfTest, openSettings };
     startup.entry = enableBarContextMenu();
+    shared = joinGradientBars(); // synchronous: the registry is claimed before anything awaits
+    startup.phase = "registering entry point";
+    const extra = await registerSpicetifyEntries();
+    if (extra) startup.entry += ` + ${extra}`;
     startup.phase = "ready";
     console.log(`[gcb] v${VERSION} ready — open the settings with a ${startup.entry}, or __gcb.openSettings().`);
+    if (startup.entryErrors.length) console.warn("[gcb] Spicetify entry points unavailable:", startup.entryErrors.join("; "));
   } catch (e) {
     startup.phase = "failed";
     startup.error = e?.stack || String(e);
