@@ -1,5 +1,5 @@
 // NAME: Gradient Connect Bar
-// VERSION: 0.4.1
+// VERSION: 1.0.0
 // AUTHOR: VoidCrowned
 // REPO: https://github.com/VoidCrowned/spicetify-gradient-connect-bar
 // DESCRIPTION: Recolours Spotify's Connect bar ("Playing on …") with a solid colour or a multi-stop gradient.
@@ -16,7 +16,7 @@
 (async function gcb() {
   "use strict";
 
-  const VERSION = "0.4.1";
+  const VERSION = "1.0.0";
   // Where this copy was loaded from: the Marketplace (jsDelivr) or the CLI (Extensions folder).
   // currentScript is only set before the first await, so capture it here.
   const SOURCE = document.currentScript?.src || null;

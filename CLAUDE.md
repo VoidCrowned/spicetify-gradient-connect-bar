@@ -20,6 +20,7 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 
 ## Project management
 
+- Releases are tagged `vX.Y.Z` with a GitHub release and a `CHANGELOG.md` entry.
 - Work is tracked as **GitHub issues** in the milestones *Milestone 1 — Port & retarget*, *Milestone 2 — Text colour*, *Milestone 3 — GPB parity*, *Milestone 4 — Release 1.0.0* and *Future*. Each milestone has one **tracking issue** (#30–#33, #37) listing its issues as checkboxes. `ROADMAP.md` mirrors them — when you close, add or re-scope an issue, update `ROADMAP.md` and the tracking issue in the same change.
 - **Don't add the repo topic `spicetify-extensions` before Milestone 4 (the release)**: the Marketplace lists every repo with it.
 - The Marketplace loads the extension via jsDelivr `@main`. `purge-jsdelivr.yml` clears the cache on every push and release; `cdn-heal.yml` runs every 3 h and purges again whenever the CDN's `VERSION` differs from `main`'s. If the CDN lags, don't purge by hand repeatedly (purges get throttled); only if it's urgent: `gh workflow run purge-jsdelivr.yml`. GitHub switches the heal off after 60 days without repository activity; every push and release switches it back on.
@@ -45,7 +46,8 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 | `.github/workflows/purge-jsdelivr.yml` | Push, release and manual: re-enables `cdn-heal.yml`, purges jsDelivr `@main` and polls up to 20 min for the new `VERSION`. Throttling and a stale CDN are warnings. |
 | `.github/workflows/cdn-heal.yml` | Every 3 h (`23 */3 * * *`) and manually: purges again only while the CDN's `VERSION` differs from `main`'s. A separate file, because GitHub disables a whole scheduled workflow after 60 days without activity. |
 | `.github/scripts/purge-jsdelivr.sh` | The purge-and-poll logic both workflows run (`--if-stale` for the heal). |
-| `preview.png` | Marketplace screenshot (a placeholder until Milestone 4, #18). |
+| `preview.png` | Marketplace screenshot and the README's image: the settings window with the preview strip (Void's screenshot, #18). |
+| `CHANGELOG.md` | Release notes, one entry per tagged version. |
 | `LICENSE` | WTFPL v2, byte-identical to GPB's and https://www.wtfpl.net/txt/copying/ (`.gitattributes` keeps it `-text`). |
 
 ## Conventions
