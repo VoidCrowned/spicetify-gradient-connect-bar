@@ -11,7 +11,7 @@ Gradient Progress Bar's code, pointed at the Connect bar. Tracking: [#30](https:
 | [#1](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/1) | Scaffold the repository like Gradient Progress Bar | packaging, documentation | ✅ |
 | [#2](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/2) | Settings storage and migrations scaffold | core | ✅ |
 | [#3](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/3) | Connect bar rendering: solid colour or a gradient of up to 8 colours | rendering | ✅ |
-| [#4](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/4) | Theme-colour and transparent stops | rendering, compatibility | ✅ |
+| [#4](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/4) | Theme-colour ~~and transparent~~ stops — transparent stops removed: no opacity, matching GPB | rendering, compatibility | ✅ |
 | [#5](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/5) | Settings modal: stop editor and inline colour picker | ui | ✅ |
 | [#6](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/6) | Remove the Spread modes and all progress-bar code | rendering | ✅ |
 | [#7](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/7) | Preview strip in the settings | ui | ✅ |
@@ -30,7 +30,7 @@ A *Text colour* setting: Auto (default), Black, White or Spotify default. Auto p
 | [#13](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/13) | Auto: sample the gradient and pick by worst-case WCAG contrast | rendering | ✅ |
 | [#14](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/14) | Write the chosen text colour into the bar's rule | rendering | ✅ |
 | [#15](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/15) | Recalculate the text colour when things change (debounced) | rendering | ✅ |
-| [#16](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/16) | Warn when neither black nor white is readable | ui | ✅ |
+| [#16](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/16) | ~~Warn when neither black nor white is readable~~ superseded — no hint or warnings, user decides | ui | — |
 | [#17](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/17) | `__gcb.status()` reports the text colour | testing | ✅ |
 
 ## Milestone 3 — Release 1.0.0
@@ -56,7 +56,7 @@ Agreed ideas, not scheduled. Tracking: [#33](https://github.com/VoidCrowned/spic
 | [#23](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/23) | "Mirror song progress" mode | the bar shows the playback position |
 | [#24](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/24) | Pull the code shared with GPB into a common module | settings, picker, stop editor, self-test helpers |
 | [#25](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/25) | Hover effect | |
-| [#26](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/26) | ~~Per-colour opacity~~ dropped — not planned in GPB ([VoidCrowned/spicetify-gradient-progress-bar#17](https://github.com/VoidCrowned/spicetify-gradient-progress-bar/issues/17)) | |
+| [#26](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/26) | ~~Per-colour opacity~~ dropped — no opacity, matching GPB ([VoidCrowned/spicetify-gradient-progress-bar#17](https://github.com/VoidCrowned/spicetify-gradient-progress-bar/issues/17)) | |
 | [#27](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/27) | ~~Gradient angle~~ dropped — not planned in GPB ([VoidCrowned/spicetify-gradient-progress-bar#16](https://github.com/VoidCrowned/spicetify-gradient-progress-bar/issues/16)) | |
 | [#28](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/28) | Custom stop positions | schema change |
 | [#29](https://github.com/VoidCrowned/spicetify-gradient-connect-bar/issues/29) | Presets | as in GPB |
