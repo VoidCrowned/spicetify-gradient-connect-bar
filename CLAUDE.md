@@ -46,7 +46,7 @@ The maintainer (Void) has little time at the PC and wants to **bug-test finished
 | `.github/workflows/purge-jsdelivr.yml` | Push, release and manual: re-enables `cdn-heal.yml`, purges jsDelivr `@main` and polls up to 20 min for the new `VERSION`. Throttling and a stale CDN are warnings. |
 | `.github/workflows/cdn-heal.yml` | Every 3 h (`23 */3 * * *`) and manually: purges again only while the CDN's `VERSION` differs from `main`'s. A separate file, because GitHub disables a whole scheduled workflow after 60 days without activity. |
 | `.github/scripts/purge-jsdelivr.sh` | The purge-and-poll logic both workflows run (`--if-stale` for the heal). |
-| `preview.png` | Marketplace screenshot and the README's image: the settings window with the preview strip (Void's screenshot, #18). |
+| `preview.png` | Marketplace screenshot and the README's image, 580 px wide like GPB's: the Connect bar above the settings window on GPB's backdrop, composed from Void's screenshots (#18). The bar is shortened by cutting out its middle, seamless because the Void gradient is symmetric. |
 | `CHANGELOG.md` | Release notes, one entry per tagged version. |
 | `LICENSE` | WTFPL v2, byte-identical to GPB's and https://www.wtfpl.net/txt/copying/ (`.gitattributes` keeps it `-text`). |
 

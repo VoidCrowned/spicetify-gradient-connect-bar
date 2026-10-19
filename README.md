@@ -4,7 +4,7 @@ A [Spicetify](https://spicetify.app) extension that recolours Spotify's **Connec
 
 > **Status:** released — **v1.0.0**. See the [changelog](CHANGELOG.md) and the [roadmap](ROADMAP.md).
 
-<p align="center"><img src="preview.png" alt="Gradient Connect Bar: the settings window, with the preview strip showing a gradient Connect bar" width="524"></p>
+<p align="center"><img src="preview.png" alt="Gradient Connect Bar: a gradient Connect bar and the settings window with the preview strip" width="580"></p>
 
 ## Features
 
