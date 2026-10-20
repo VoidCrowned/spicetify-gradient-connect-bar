@@ -8,14 +8,15 @@ A [Spicetify](https://spicetify.app) extension that recolours Spotify's **Connec
 
 ## Features
 
-- **Solid colour or gradient**: start with one colour, add more and the bar becomes a gradient. The gradient spans the whole bar.
-- **Up to 8 colours**, edited in a built-in colour picker with R/G/B and hex input, and reordered by drag-and-drop.
-- **Theme colour**: a colour that follows your theme's accent instead of a fixed value. With themes that change their accent per song (like Hazy's album-art mode), the bar follows along.
-- **Text colour**: *Auto* picks black or white text, whichever stays more readable over every colour behind it. Or choose *Black*, *White*, or *Spotify default* to leave the text alone. You judge the result in the preview.
-- **Presets**: five built-in gradients (Void, Sunset, Aurora, Neon, Fairy), the same as Gradient Progress Bar's, and up to 12 of your own, with a preview and Undo.
-- **Share codes**: copy your settings as a short code (`gcb1:…`) and paste someone else's. Codes from Gradient Progress Bar (`gpb1:…`) work too, so a gradient can move between the two bars.
-- **Preview strip**: the bar only exists while you play on another device, so the settings show what it will look like.
-- **Leaves everything else alone**: only the Connect bar changes. It runs side by side with [Gradient Progress Bar](https://github.com/VoidCrowned/spicetify-gradient-progress-bar), each with its own settings.
+Your Connect bar, your colours. When Spotify plays on another device, the "Playing on …" bar under the player gets one colour or a gradient of up to eight, and it changes as you go.
+
+- **Paint it your way.** Click a colour dot, then drag in the picker, type a hex code, or take any colour from the screen with the eyedropper. Press **+** for another colour and the bar becomes a gradient across its full width. Drag the dots to reorder them.
+- **Text that stays readable.** *Auto* picks black or white for the "Playing on …" text, whichever reads better over the colours behind it. Or choose *Black*, *White*, or *Spotify default*.
+- **Match your theme.** *Use theme colour* makes a colour follow your theme's accent, even one that changes with every album cover, like Hazy's album-art mode.
+- **Presets to start from.** There are five built-in gradients (Void, Sunset, Aurora, Neon, Fairy) and room for 12 of your own. Click a preset once to preview it and again to apply it. *Undo* is there if you change your mind.
+- **Share your look.** **Export** copies your settings as a short code (`gcb1:…`), and whoever you send it to pastes it into **Import**. Codes from [Gradient Progress Bar](https://github.com/VoidCrowned/spicetify-gradient-progress-bar) (`gpb1:…`) work too.
+- **See it before you need it.** The bar only shows while audio plays on another device, so the settings window has a preview strip that looks just like it.
+- **Plays nicely with others.** Only the Connect bar changes. It runs alongside Gradient Progress Bar, each with its own settings. With default settings the bar keeps its own colour, and *Reset* takes you back there in two clicks.
 
 ## Installation
 
@@ -34,30 +35,15 @@ To uninstall: `spicetify config extensions gradientConnectBar.js-` then `spiceti
 
 ## Usage
 
-Open the settings in any of these ways:
+**Right-click the Connect bar** to open the settings. It's only there while audio plays on another device, so you can also use the brush icon in the top bar or the profile menu, where Spicetify shows them ([Troubleshooting](#troubleshooting)). If you also use Gradient Progress Bar, the two share one top-bar button.
 
-- **The top-bar button** with the brush icon. If Gradient Progress Bar is installed too and shares it (from its next version), the two extensions use **one** button, labelled *Gradient bars*, which opens a small menu with both; with only one of them it opens that one's settings straight away.
-- **The profile menu**: *Gradient Connect Bar*.
-- **Right-click the Connect bar**. The bar is only there while audio plays on another device.
-- `__gcb.openSettings()` in the devtools console ([how to open it](TESTING.md#opening-the-devtools-console)).
+The window explains the rest, with a short help text at the bottom and tooltips on the controls.
 
-In the settings:
-
-
-- **Text colour** (below the Gradient switch): **Auto** (the default) looks at the colours behind the "Playing on …" text and picks black or white, whichever has the better contrast at the *worst* spot, so a dark patch behind light text can't hide. **Black** and **White** force that colour; **Spotify default** leaves the text as Spotify and your theme colour it.
-- **Click a colour dot** to select it (it gets a ring) and edit it in the colour picker below the dots: drag in the square and the hue bar, use the eyedropper (where available), or type R/G/B values or a **hex code** (`#8372fd`, `8372fd` or `#87f`). The **copy icon** inside the hex field copies the colour as `#rrggbb`.
-- **Use theme colour** makes the selected colour follow your theme's accent. Colours are always opaque.
-- **Right-click a dot** for **Duplicate** and **Remove** (also with the context-menu key or Shift+F10).
-- **Gradient** switches the gradient on and off. With only one colour, switching it on adds a second colour (a copy of the first) for you to change.
-- **− | +** (the pill after the dots): **+** adds a copy of the last colour; **−** removes the selected one. Up to 8 colours; at least one always stays.
-- **Delete** or **Backspace** on a colour dot you've tabbed to removes that colour.
-- **Drag the dots** to reorder the gradient. With the keyboard, Alt + arrow keys move the focused colour (Alt + Home / End to the first or last place).
-- **Presets** (below Text colour): click a chip to preview it. The strip shows it, text colour included, and the chip asks *Apply?*; click it again to apply. Escape or clicking elsewhere cancels; clicking another chip previews that one instead. After applying, *Undo* is there for 10 seconds. The built-ins only change the colours and keep your text colour; your own presets bring back everything they saved, the text colour included.
-- **+ Save** stores the current settings as your own preset: type a name and press Enter (Escape cancels). **Right-click your own preset** (or use the context-menu key) to **Rename** it, **Update** it to the current colours, or **Delete** it (with Undo).
-- **Export** copies a short code for the current settings to the clipboard; the button shows *Copied* with a check. **Import** opens a field: paste a code and the strip previews it; press Enter or *Apply* to use it, and you can Undo it. Codes from Gradient Progress Bar bring their colours and keep your text colour.
-- **Reset** goes back to the default: a single colour that follows your theme, which leaves the bar its own colour, and *Auto* text. It asks for a second click to confirm.
-
-With a single colour that follows your theme, the bar keeps its own colour.
+**Keyboard:**
+- Alt + ←/→ moves a colour.
+- Delete removes it.
+- Enter jumps to the hex field.
+- Shift + F10 opens a colour's menu.
 
 ## Compatibility
 
